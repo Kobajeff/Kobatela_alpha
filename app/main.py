@@ -3,6 +3,7 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import models
@@ -17,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 app_info = AppInfo()
 app = FastAPI(title=app_info.name, version=app_info.version)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(get_api_router())
 
 

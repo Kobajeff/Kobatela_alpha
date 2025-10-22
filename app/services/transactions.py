@@ -4,6 +4,7 @@ from typing import Tuple
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.allowlist import AllowedRecipient
@@ -65,20 +66,32 @@ def create_transaction(db: Session, payload: TransactionCreate, *, idempotency_k
         status=TransactionStatus.COMPLETED,
         idempotency_key=idempotency_key,
     )
-    db.add(transaction)
-    db.flush()
+    try:
+        db.add(transaction)
+        db.flush()
 
-    audit = AuditLog(
-        actor="system",
-        action="CREATE_TRANSACTION",
-        entity="Transaction",
-        entity_id=transaction.id,
-        data_json=payload.model_dump(),
-        at=utcnow(),
-    )
-    db.add(audit)
-    db.commit()
-    db.refresh(transaction)
+        audit = AuditLog(
+            actor="system",
+            action="CREATE_TRANSACTION",
+            entity="Transaction",
+            entity_id=transaction.id,
+            data_json=payload.model_dump(),
+            at=utcnow(),
+        )
+        db.add(audit)
+        db.commit()
+        db.refresh(transaction)
 
-    logger.info("Transaction completed", extra={"transaction_id": transaction.id})
-    return transaction, True
+        logger.info("Transaction completed", extra={"transaction_id": transaction.id})
+        return transaction, True
+    except IntegrityError:
+        db.rollback()
+        if idempotency_key:
+            existing = get_existing_by_key(db, Transaction, idempotency_key)
+            if existing:
+                logger.info(
+                    "Idempotent transaction reused after race",
+                    extra={"transaction_id": existing.id},
+                )
+                return existing, False
+        raise

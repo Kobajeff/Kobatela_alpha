@@ -1,7 +1,7 @@
 """Transaction model."""
 from enum import Enum as PyEnum
 
-from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, String
+from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -22,6 +22,8 @@ class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
         CheckConstraint("amount > 0", name="ck_transaction_positive_amount"),
+        Index("ix_transactions_created_at", "created_at"),
+        Index("ix_transactions_status", "status"),
     )
 
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)

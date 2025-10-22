@@ -3,6 +3,7 @@ import logging
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
@@ -53,23 +54,36 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
             return agreement
 
     deposit = EscrowDeposit(escrow_id=agreement.id, amount=payload.amount, idempotency_key=idempotency_key)
-    db.add(deposit)
+    try:
+        db.add(deposit)
 
-    total = _total_deposited(db, agreement.id) + payload.amount
-    if total >= agreement.amount_total:
-        agreement.status = EscrowStatus.FUNDED
+        total = _total_deposited(db, agreement.id) + payload.amount
+        if total >= agreement.amount_total:
+            agreement.status = EscrowStatus.FUNDED
 
-    event = EscrowEvent(
-        escrow_id=agreement.id,
-        kind="DEPOSIT",
-        data_json={"amount": payload.amount},
-        at=utcnow(),
-    )
-    db.add(event)
-    db.commit()
-    db.refresh(agreement)
-    logger.info("Escrow deposit processed", extra={"escrow_id": agreement.id, "status": agreement.status})
-    return agreement
+        event = EscrowEvent(
+            escrow_id=agreement.id,
+            kind="DEPOSIT",
+            data_json={"amount": payload.amount},
+            at=utcnow(),
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(agreement)
+        logger.info("Escrow deposit processed", extra={"escrow_id": agreement.id, "status": agreement.status})
+        return agreement
+    except IntegrityError:
+        db.rollback()
+        if idempotency_key:
+            existing = get_existing_by_key(db, EscrowDeposit, idempotency_key)
+            if existing:
+                logger.info(
+                    "Idempotent escrow deposit reused after race",
+                    extra={"escrow_id": escrow_id, "deposit_id": existing.id},
+                )
+                db.refresh(agreement)
+                return agreement
+        raise
 
 
 def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) -> EscrowAgreement:
