@@ -66,7 +66,7 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
             kind="DEPOSIT",
             data_json={"amount": payload.amount},
             at=utcnow(),
-        )
+        
         db.add(event)
         db.commit()
         db.refresh(agreement)
@@ -123,16 +123,31 @@ def client_approve(db: Session, escrow_id: int, payload: EscrowActionPayload | N
 def client_reject(db: Session, escrow_id: int, payload: EscrowActionPayload | None = None) -> EscrowAgreement:
     agreement = _get_escrow_or_404(db, escrow_id)
 
+ codex/build-backend-prototype-for-kobatella-5vit0e
+    # Idempotence : si déjà terminal, on renvoie tel quel
+    if agreement.status in (EscrowStatus.RELEASED, EscrowStatus.REFUNDED, EscrowStatus.CANCELLED):
+        return agreement
+
+    # Choix du statut terminal :
+    # - si des fonds ont été versés / livrés → remboursement
+    # - sinon → annulation simple
+    if agreement.status in (EscrowStatus.FUNDED, EscrowStatus.RELEASABLE):
+        agreement.status = EscrowStatus.REFUNDED
+    else:
+        agreement.status = EscrowStatus.CANCELLED
+
     event = EscrowEvent(
         escrow_id=agreement.id,
         kind="CLIENT_REJECTED",
-        data_json={"note": payload.note if payload else None},
+        data_json={"note": (payload.note if payload else None)},
+
         at=utcnow(),
     )
     db.add(event)
     db.commit()
     db.refresh(agreement)
-    logger.info("Escrow rejected", extra={"escrow_id": agreement.id})
+codex/build-backend-prototype-for-kobatella-5vit0e
+    logger.info("Escrow rejected", extra={"escrow_id": agreement.id, "status": agreement.status})
     return agreement
 
 
