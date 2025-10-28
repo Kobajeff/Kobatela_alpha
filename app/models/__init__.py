@@ -6,6 +6,7 @@ from .base import Base
 from .certified import CertifiedAccount, CertificationLevel
 from .escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
 from .transaction import Transaction, TransactionStatus
+from .spend import SpendCategory, Merchant, AllowedUsage, Purchase, PurchaseStatus
 from .user import User
 
 __all__ = [
@@ -21,5 +22,10 @@ __all__ = [
     "EscrowStatus",
     "Transaction",
     "TransactionStatus",
+    "SpendCategory",
+    "Merchant",
+    "AllowedUsage",
+    "Purchase",
+    "PurchaseStatus",
     "User",
 ]
