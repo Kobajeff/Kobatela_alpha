@@ -117,6 +117,13 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     proof_status = "APPROVED" if auto_approve else "PENDING"
     milestone.status = MilestoneStatus.APPROVED if auto_approve else MilestoneStatus.PENDING_REVIEW
 
+    proof = Proof(
+        escrow_id=payload.escrow_id,
+        milestone_id=milestone.id,
+        metadata_=metadata_payload or None,
+        type=payload.type,
+        storage_url=payload.storage_url,
+        sha256=payload.sha256,
     if review_reason is not None:
         metadata_payload["review_reason"] = review_reason
 
