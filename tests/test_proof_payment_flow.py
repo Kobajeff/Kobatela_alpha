@@ -50,6 +50,14 @@ async def test_proof_approval_triggers_payment(client, auth_headers, db_session)
     db_session.add(milestone)
     db_session.flush()
 
+    deposit_headers = {**auth_headers, "Idempotency-Key": "proof-flow-deposit"}
+    deposit_resp = await client.post(
+        f"/escrows/{escrow_id}/deposit",
+        json={"amount": 500.0},
+        headers=deposit_headers,
+    )
+    assert deposit_resp.status_code == 200
+
     proof_resp = await client.post(
         "/proofs",
         json={

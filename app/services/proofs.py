@@ -5,6 +5,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models import (
+    AuditLog,
+    EscrowAgreement,
+    EscrowEvent,
+    EscrowStatus,
+    Milestone,
+    MilestoneStatus,
+    Proof,
+)
 from app.models import AuditLog, Milestone, MilestoneStatus, Payment, PaymentStatus, Proof
 from app.schemas.proof import ProofCreate
 from app.services import (
@@ -65,6 +74,8 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
 
     metadata_payload = dict(payload.metadata or {})
     review_reason: str | None = None
+    auto_approve = False
+
     if milestone.proof_type == "PHOTO":
         geofence = None
         if (
@@ -97,6 +108,15 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
                     detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
                 )
             review_reason = reason
+        else:
+            auto_approve = True
+
+    if review_reason is not None:
+        metadata_payload["review_reason"] = review_reason
+
+    proof_status = "APPROVED" if auto_approve else "PENDING"
+    milestone.status = MilestoneStatus.APPROVED if auto_approve else MilestoneStatus.PENDING_REVIEW
+
     if review_reason is not None:
         metadata_payload["review_reason"] = review_reason
 
@@ -107,6 +127,10 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         storage_url=payload.storage_url,
         sha256=payload.sha256,
         metadata_=metadata_payload or None,
+        status=proof_status,
+        created_at=utcnow(),
+    )
+
         metadata_=payload.metadata_,
         status="PENDING",
         created_at=utcnow(),
@@ -125,6 +149,39 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             at=utcnow(),
         )
     )
+
+    escrow = db.get(EscrowAgreement, payload.escrow_id)
+    if escrow is None:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response("ESCROW_NOT_FOUND", "Escrow not found for proof submission."),
+        )
+
+    payment = None
+    if auto_approve:
+        logger.info(
+            "Auto-approving photo proof",
+            extra={"escrow_id": escrow.id, "milestone_id": milestone.id, "proof_id": proof.id},
+        )
+        try:
+            payment = payments_service.execute_payout(
+                db,
+                escrow=escrow,
+                milestone=milestone,
+                amount=milestone.amount,
+                idempotency_key=_milestone_payment_key(escrow.id, milestone.id, milestone.amount),
+            )
+        except ValueError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=error_response("INSUFFICIENT_ESCROW_BALANCE", str(exc)),
+            ) from exc
+        _handle_post_payment(db, escrow)
+    else:
+        db.commit()
+
     db.commit()
     db.refresh(proof)
     db.refresh(milestone)
@@ -135,6 +192,9 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "milestone_id": milestone.id,
             "escrow_id": payload.escrow_id,
             "milestone_status": milestone.status.value,
+            "auto_approved": auto_approve,
+            "payment_id": getattr(payment, "id", None),
+        },
         },
         extra={"proof_id": proof.id, "milestone_id": milestone.id, "escrow_id": payload.escrow_id},
     )
@@ -160,6 +220,16 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=error_response("MILESTONE_MISSING", "Milestone linked to proof is missing."),
         )
+
+    escrow = db.get(EscrowAgreement, proof.escrow_id)
+    if escrow is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response("ESCROW_NOT_FOUND", "Escrow not found for proof approval."),
+        )
+
+    proof.status = "APPROVED"
+    milestone.status = MilestoneStatus.APPROVED
 
     proof.status = "APPROVED"
     milestone.status = MilestoneStatus.APPROVED
@@ -189,6 +259,24 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
             at=utcnow(),
         )
     )
+
+    try:
+        payment = payments_service.execute_payout(
+            db,
+            escrow=escrow,
+            milestone=milestone,
+            amount=milestone.amount,
+            idempotency_key=_milestone_payment_key(escrow.id, milestone.id, milestone.amount),
+        )
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response("INSUFFICIENT_ESCROW_BALANCE", str(exc)),
+        ) from exc
+
+    _handle_post_payment(db, escrow)
+
     db.flush()
 
     payments_service.execute_payment(db, payment.id)
@@ -196,6 +284,12 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     db.refresh(milestone)
     logger.info(
         "Proof approved",
+        extra={
+            "proof_id": proof.id,
+            "payment_id": payment.id,
+            "milestone_id": milestone.id,
+            "milestone_status": milestone.status.value,
+        },
         extra={"proof_id": proof.id, "payment_id": payment.id, "milestone_id": milestone.id},
     )
     return proof
@@ -257,6 +351,38 @@ def _get_proof_or_404(db: Session, proof_id: int) -> Proof:
 def _get_milestone_by_idx(db: Session, escrow_id: int, milestone_idx: int) -> Milestone | None:
     stmt = select(Milestone).where(Milestone.escrow_id == escrow_id, Milestone.idx == milestone_idx)
     return db.scalars(stmt).first()
+
+
+def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: float) -> str:
+    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount}"
+
+
+def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:
+    next_milestone = milestones_service.open_next_waiting_milestone(db, escrow.id)
+    if next_milestone:
+        logger.info(
+            "Next milestone available",
+            extra={
+                "escrow_id": escrow.id,
+                "milestone_id": next_milestone.id,
+                "status": next_milestone.status.value,
+            },
+        )
+
+    if milestones_service.all_milestones_paid(db, escrow.id):
+        if escrow.status != EscrowStatus.RELEASED:
+            escrow.status = EscrowStatus.RELEASED
+            db.add(
+                EscrowEvent(
+                    escrow_id=escrow.id,
+                    kind="CLOSED",
+                    data_json={"reason": "all_milestones_paid"},
+                    at=utcnow(),
+                )
+            )
+            db.commit()
+            db.refresh(escrow)
+            logger.info("Escrow closed after all milestones paid", extra={"escrow_id": escrow.id})
 
 
 __all__ = ["submit_proof", "approve_proof", "reject_proof"]

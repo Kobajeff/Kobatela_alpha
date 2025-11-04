@@ -35,4 +35,16 @@ def all_milestones_paid(db: Session, escrow_id: int) -> bool:
     return len(items) > 0 and all(m.status == MilestoneStatus.PAID for m in items)
 
 
+def open_next_waiting_milestone(db: Session, escrow_id: int) -> Milestone | None:
+    """Return the next milestone that is not yet paid."""
+
+    stmt = select(Milestone).where(Milestone.escrow_id == escrow_id).order_by(Milestone.idx.asc())
+    milestones = list(db.scalars(stmt).all())
+    for milestone in milestones:
+        if milestone.status != MilestoneStatus.PAID:
+            return milestone
+    return None
+
+
+__all__ = ["all_milestones_paid", "get_current_open_milestone", "open_next_waiting_milestone"]
 __all__ = ["get_current_open_milestone", "all_milestones_paid"]
