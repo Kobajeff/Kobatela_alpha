@@ -202,8 +202,6 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "auto_approved": auto_approve,
             "payment_id": getattr(payment, "id", None),
         },
-        },
-        extra={"proof_id": proof.id, "milestone_id": milestone.id, "escrow_id": payload.escrow_id},
     )
     return proof
 
