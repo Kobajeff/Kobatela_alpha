@@ -7,6 +7,11 @@ from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Milestone, MilestoneStatus, Payment, PaymentStatus, Proof
 from app.schemas.proof import ProofCreate
+from app.services import (
+    milestones as milestones_service,
+    payments as payments_service,
+    rules as rules_service,
+)
 from app.services import payments as payments_service
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
@@ -25,6 +30,30 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             detail=error_response("MILESTONE_NOT_FOUND", "Milestone not found for escrow."),
         )
 
+    current = milestones_service.get_current_open_milestone(db, payload.escrow_id)
+    if current is None:
+        logger.info(
+            "No open milestone for proof submission",
+            extra={"escrow_id": payload.escrow_id, "submitted_idx": payload.milestone_idx},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response("NO_OPEN_MILESTONE", "No open milestone available for proof submission."),
+        )
+    if current.idx != milestone.idx:
+        logger.info(
+            "Proof submission rejected due to sequence error",
+            extra={
+                "escrow_id": payload.escrow_id,
+                "expected_idx": current.idx,
+                "submitted_idx": payload.milestone_idx,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=error_response("SEQUENCE_ERROR", "Previous milestone not paid."),
+        )
+
     if milestone.status != MilestoneStatus.WAITING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -34,12 +63,50 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             ),
         )
 
+    metadata_payload = dict(payload.metadata or {})
+    review_reason: str | None = None
+    if milestone.proof_type == "PHOTO":
+        geofence = None
+        if (
+            milestone.geofence_lat is not None
+            and milestone.geofence_lng is not None
+            and milestone.geofence_radius_m is not None
+        ):
+            geofence = (
+                float(milestone.geofence_lat),
+                float(milestone.geofence_lng),
+                float(milestone.geofence_radius_m),
+            )
+        ok, reason = rules_service.validate_photo_metadata(
+            metadata=metadata_payload,
+            geofence=geofence,
+            max_skew_minutes=120,
+        )
+        if not ok:
+            logger.info(
+                "Photo proof metadata requires manual handling",
+                extra={
+                    "reason": reason,
+                    "escrow_id": payload.escrow_id,
+                    "milestone_id": milestone.id,
+                },
+            )
+            if reason == "OUT_OF_GEOFENCE":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
+                )
+            review_reason = reason
+    if review_reason is not None:
+        metadata_payload["review_reason"] = review_reason
+
     proof = Proof(
         escrow_id=payload.escrow_id,
         milestone_id=milestone.id,
         type=payload.type,
         storage_url=payload.storage_url,
         sha256=payload.sha256,
+        metadata_=metadata_payload or None,
         metadata_=payload.metadata_,
         status="PENDING",
         created_at=utcnow(),
@@ -63,6 +130,12 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     db.refresh(milestone)
     logger.info(
         "Proof submitted",
+        extra={
+            "proof_id": proof.id,
+            "milestone_id": milestone.id,
+            "escrow_id": payload.escrow_id,
+            "milestone_status": milestone.status.value,
+        },
         extra={"proof_id": proof.id, "milestone_id": milestone.id, "escrow_id": payload.escrow_id},
     )
     return proof

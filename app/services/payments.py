@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import AuditLog, EscrowAgreement, EscrowStatus, Milestone, MilestoneStatus, Payment, PaymentStatus
+from app.services import milestones as milestones_service
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -82,6 +83,7 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
         Milestone.status != MilestoneStatus.PAID,
     )
     remaining = db.scalar(stmt) or 0
+    if remaining == 0 or milestones_service.all_milestones_paid(db, escrow_id):
     if remaining == 0:
         escrow.status = EscrowStatus.RELEASED
         logger.info("Escrow released after payments", extra={"escrow_id": escrow.id})

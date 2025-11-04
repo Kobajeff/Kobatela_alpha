@@ -30,6 +30,9 @@ class Milestone(Base):
     amount: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False)
     proof_type: Mapped[str] = mapped_column(String(50), nullable=False)
     validator: Mapped[str] = mapped_column(String(50), nullable=False, default="SENDER")
+    geofence_lat: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
+    geofence_lng: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
+    geofence_radius_m: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     status: Mapped[MilestoneStatus] = mapped_column(SqlEnum(MilestoneStatus), nullable=False, default=MilestoneStatus.WAITING)
 
     proofs = relationship("Proof", back_populates="milestone", cascade="all, delete-orphan")
