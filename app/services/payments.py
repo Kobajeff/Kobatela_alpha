@@ -84,6 +84,7 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
     )
     remaining = db.scalar(stmt) or 0
     if remaining == 0 or milestones_service.all_milestones_paid(db, escrow_id):
+    if remaining == 0:
         escrow.status = EscrowStatus.RELEASED
         logger.info("Escrow released after payments", extra={"escrow_id": escrow.id})
 

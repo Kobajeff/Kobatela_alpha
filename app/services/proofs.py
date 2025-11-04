@@ -12,6 +12,7 @@ from app.services import (
     payments as payments_service,
     rules as rules_service,
 )
+from app.services import payments as payments_service
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
@@ -106,6 +107,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         storage_url=payload.storage_url,
         sha256=payload.sha256,
         metadata_=metadata_payload or None,
+        metadata_=payload.metadata_,
         status="PENDING",
         created_at=utcnow(),
     )
@@ -134,6 +136,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "escrow_id": payload.escrow_id,
             "milestone_status": milestone.status.value,
         },
+        extra={"proof_id": proof.id, "milestone_id": milestone.id, "escrow_id": payload.escrow_id},
     )
     return proof
 
