@@ -26,3 +26,8 @@ class ProofRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProofDecision(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$", description="Decision outcome")
+    note: str | None = None
