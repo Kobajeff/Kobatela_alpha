@@ -47,7 +47,7 @@ def test_create_milestone_proof_payment(db_session):
         type="SIGNED_CONTRACT",
         storage_url="https://example.com/proof.pdf",
         sha256="abc123",
-        metadata={"pages": 3},
+        metadata_={"pages": 3},
         status="PENDING",
         created_at=datetime.now(tz=UTC),
     )

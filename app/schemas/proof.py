@@ -10,7 +10,7 @@ class ProofCreate(BaseModel):
     type: str = Field(min_length=1, max_length=50)
     storage_url: str = Field(min_length=1, max_length=1024)
     sha256: str = Field(min_length=1, max_length=128)
-    metadata: dict | None = None
+    metadata_: dict | None = None
 
 
 class ProofRead(BaseModel):
@@ -20,7 +20,7 @@ class ProofRead(BaseModel):
     type: str
     storage_url: str
     sha256: str
-    metadata: dict | None
+    metadata_: dict | None
     status: str
     created_at: datetime
     updated_at: datetime
