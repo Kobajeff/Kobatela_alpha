@@ -47,3 +47,4 @@ def open_next_waiting_milestone(db: Session, escrow_id: int) -> Milestone | None
 
 
 __all__ = ["all_milestones_paid", "get_current_open_milestone", "open_next_waiting_milestone"]
+__all__ = ["get_current_open_milestone", "all_milestones_paid"]
