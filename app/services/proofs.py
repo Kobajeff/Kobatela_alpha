@@ -14,12 +14,15 @@ from app.models import (
     MilestoneStatus,
     Proof,
 )
+from app.models import AuditLog, Milestone, MilestoneStatus, Payment, PaymentStatus, Proof
 from app.schemas.proof import ProofCreate
 from app.services import (
     milestones as milestones_service,
     payments as payments_service,
     rules as rules_service,
 )
+from app.services import payments as payments_service
+from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -121,10 +124,26 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         type=payload.type,
         storage_url=payload.storage_url,
         sha256=payload.sha256,
+    if review_reason is not None:
+        metadata_payload["review_reason"] = review_reason
+
+    proof = Proof(
+        escrow_id=payload.escrow_id,
+        milestone_id=milestone.id,
+        type=payload.type,
+        storage_url=payload.storage_url,
+        sha256=payload.sha256,
+        metadata_=metadata_payload or None,
         status=proof_status,
         created_at=utcnow(),
     )
 
+        metadata_=payload.metadata_,
+        status="PENDING",
+        created_at=utcnow(),
+    )
+
+    milestone.status = MilestoneStatus.PENDING_REVIEW
     db.add(proof)
     db.flush()
     db.add(
@@ -170,6 +189,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     else:
         db.commit()
 
+    db.commit()
     db.refresh(proof)
     db.refresh(milestone)
     logger.info(
@@ -182,6 +202,8 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "auto_approved": auto_approve,
             "payment_id": getattr(payment, "id", None),
         },
+        },
+        extra={"proof_id": proof.id, "milestone_id": milestone.id, "escrow_id": payload.escrow_id},
     )
     return proof
 
@@ -216,6 +238,24 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     proof.status = "APPROVED"
     milestone.status = MilestoneStatus.APPROVED
 
+    proof.status = "APPROVED"
+    milestone.status = MilestoneStatus.APPROVED
+
+    payment_key = f"milestone-{milestone.id}"
+    payment = get_existing_by_key(db, Payment, payment_key)
+    if payment is None:
+        payment = Payment(
+            escrow_id=proof.escrow_id,
+            milestone_id=milestone.id,
+            amount=milestone.amount,
+            status=PaymentStatus.INITIATED,
+            idempotency_key=payment_key,
+        )
+        db.add(payment)
+        db.flush()
+    else:
+        logger.info("Reusing existing payment for milestone", extra={"payment_id": payment.id})
+
     db.add(
         AuditLog(
             actor="system",
@@ -244,6 +284,9 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
 
     _handle_post_payment(db, escrow)
 
+    db.flush()
+
+    payments_service.execute_payment(db, payment.id)
     db.refresh(proof)
     db.refresh(milestone)
     logger.info(
@@ -254,6 +297,7 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
             "milestone_id": milestone.id,
             "milestone_status": milestone.status.value,
         },
+        extra={"proof_id": proof.id, "payment_id": payment.id, "milestone_id": milestone.id},
     )
     return proof
 
