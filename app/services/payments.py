@@ -26,7 +26,6 @@ from app.utils.time import utcnow
 logger = logging.getLogger(__name__)
 
 
-
 def _sum_deposits(db: Session, escrow_id: int) -> float:
     from app.models.escrow import EscrowDeposit
 
