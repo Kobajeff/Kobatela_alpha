@@ -1,5 +1,6 @@
-"""Payment execution services (PSP stub)."""
+"""Payment execution services."""
 import logging
+from uuid import uuid4
 from typing import Optional
 
 from fastapi import HTTPException, status
@@ -31,7 +32,11 @@ def _sum_deposits(db: Session, escrow_id: int) -> float:
 
 
 def _sum_payments(db: Session, escrow_id: int) -> float:
-    stmt = select(func.coalesce(func.sum(Payment.amount), 0.0)).where(Payment.escrow_id == escrow_id)
+    stmt = (
+        select(func.coalesce(func.sum(Payment.amount), 0.0))
+        .where(Payment.escrow_id == escrow_id)
+        .where(Payment.status.in_([PaymentStatus.SENT, PaymentStatus.SETTLED]))
+    )
     return float(db.scalar(stmt) or 0.0)
 
 
@@ -111,6 +116,7 @@ def execute_payout(
                 )
             milestone.status = MilestoneStatus.PAYING
 
+        payment.psp_ref = payment.psp_ref or f"PSP-{uuid4()}"
         payment.status = PaymentStatus.SENT
         if milestone:
             milestone.status = MilestoneStatus.PAID

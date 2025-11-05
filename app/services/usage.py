@@ -29,12 +29,15 @@ def add_allowed_payee(
 ) -> AllowedPayee:
     """Register a payee that is allowed to receive conditional usage payouts."""
 
+    today = utcnow().date()
+
     payee = AllowedPayee(
         escrow_id=escrow_id,
         payee_ref=payee_ref,
         label=label,
         daily_limit=daily_limit,
         total_limit=total_limit,
+        last_reset_at=today,
     )
     db.add(payee)
 
@@ -124,6 +127,15 @@ def spend_to_allowed_payee(
             detail=error_response("PAYEE_NOT_ALLOWED", "This payee is not allowed for this escrow."),
         )
 
+    today = utcnow().date()
+    if payee.last_reset_at is None or payee.last_reset_at != today:
+        logger.info(
+            "Resetting daily spend counters",
+            extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "previous_date": payee.last_reset_at},
+        )
+        payee.spent_today = 0.0
+        payee.last_reset_at = today
+
     if payee.daily_limit is not None and (payee.spent_today + amount) > payee.daily_limit + 1e-9:
         logger.info(
             "Daily limit reached",
@@ -183,6 +195,7 @@ def spend_to_allowed_payee(
 
     payee.spent_today = float(payee.spent_today or 0.0) + amount
     payee.spent_total = float(payee.spent_total or 0.0) + amount
+    payee.last_reset_at = today
 
     event = EscrowEvent(
         escrow_id=escrow.id,

@@ -1,4 +1,6 @@
 """Allowed payee model definitions."""
+from datetime import date
+
 from sqlalchemy import Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,3 +22,4 @@ class AllowedPayee(Base):
 
     spent_today: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False, default=0.0)
     spent_total: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False, default=0.0)
+    last_reset_at: Mapped[date | None] = mapped_column(nullable=True)

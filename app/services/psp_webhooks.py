@@ -20,6 +20,12 @@ logger = logging.getLogger(__name__)
 _SECRET = os.environ.get("PSP_WEBHOOK_SECRET", "")
 
 
+def verify_signature(body_bytes: bytes, signature: str) -> None:
+    """Public wrapper to validate webhook signatures."""
+
+    _verify_signature(body_bytes, signature)
+
+
 def _verify_signature(body_bytes: bytes, signature: str) -> None:
     """Validate webhook signatures using the shared secret."""
 
@@ -122,4 +128,4 @@ def _mark_payment_error(db: Session, *, psp_ref: str | None) -> None:
     logger.info("Payment marked as error", extra={"payment_id": payment.id})
 
 
-__all__ = ["_verify_signature", "handle_event"]
+__all__ = ["handle_event", "verify_signature"]
