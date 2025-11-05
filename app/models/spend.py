@@ -55,7 +55,9 @@ class AllowedUsage(Base):
 class PurchaseStatus(str, Enum):
     """Represents the lifecycle status for purchases."""
 
+    AUTHORIZED = "AUTHORIZED"
     COMPLETED = "COMPLETED"
+    REJECTED = "REJECTED"
 
 
 class Purchase(Base):
