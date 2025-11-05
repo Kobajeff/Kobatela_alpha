@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from sqlalchemy import Boolean, CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Enum as SqlEnum, ForeignKey, Index, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -73,7 +73,7 @@ class Purchase(Base):
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"), nullable=False, index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("spend_categories.id"), nullable=True, index=True)
-    amount: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     status: Mapped[PurchaseStatus] = mapped_column(SqlEnum(PurchaseStatus), nullable=False, default=PurchaseStatus.COMPLETED)
     idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)

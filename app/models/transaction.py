@@ -1,7 +1,7 @@
 """Transaction model."""
 from enum import Enum as PyEnum
 
-from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Index, String
+from sqlalchemy import CheckConstraint, Enum as SqlEnum, ForeignKey, Index, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -28,7 +28,7 @@ class Transaction(Base):
 
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     receiver_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
-    amount: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="USD", nullable=False)
     status: Mapped[TransactionStatus] = mapped_column(SqlEnum(TransactionStatus), nullable=False, default=TransactionStatus.PENDING)
     idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)

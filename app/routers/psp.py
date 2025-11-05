@@ -24,7 +24,7 @@ async def psp_webhook(
     x_psp_ref: str | None = Header(default=None),
 ) -> dict[str, str]:
     body = await request.body()
-    psp_webhooks._verify_signature(body, x_psp_signature or "")
+    psp_webhooks.verify_signature(body, x_psp_signature or "")
 
     payload = await request.json()
     event_id = x_psp_event_id or payload.get("id") or payload.get("event_id")

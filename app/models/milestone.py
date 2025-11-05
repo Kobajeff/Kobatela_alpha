@@ -1,7 +1,7 @@
 """Milestone model definitions."""
 from enum import Enum as PyEnum
 
-from sqlalchemy import Enum as SqlEnum, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -22,12 +22,20 @@ class Milestone(Base):
     """Represents a milestone tied to an escrow agreement."""
 
     __tablename__ = "milestones"
-    __table_args__ = (UniqueConstraint("escrow_id", "idx", name="uq_milestone_idx"),)
+    __table_args__ = (
+        UniqueConstraint("escrow_id", "idx", name="uq_milestone_idx"),
+        CheckConstraint("amount > 0", name="ck_milestone_positive_amount"),
+        CheckConstraint("idx > 0", name="ck_milestone_positive_idx"),
+        CheckConstraint(
+            "geofence_radius_m IS NULL OR geofence_radius_m >= 0",
+            name="ck_milestone_geofence_radius_non_negative",
+        ),
+    )
 
     escrow_id: Mapped[int] = mapped_column(ForeignKey("escrow_agreements.id"), nullable=False, index=True)
     idx: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str] = mapped_column(String(200), nullable=False)
-    amount: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False)
     proof_type: Mapped[str] = mapped_column(String(50), nullable=False)
     validator: Mapped[str] = mapped_column(String(50), nullable=False, default="SENDER")
     geofence_lat: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
