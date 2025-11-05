@@ -1,8 +1,15 @@
-"""Rule engine helpers for proofs."""
+"""Rule engine helpers for proof validation."""
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone ,UTC
+from enum import Enum
+from typing import Any
+
+from app.models.milestone import Milestone
+from app.utils.geo import haversine_m
+from app.utils.time import parse_iso_utc
 from math import asin, cos, radians, sin, sqrt
 
 logger = logging.getLogger(__name__)

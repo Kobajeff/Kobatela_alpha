@@ -1,8 +1,11 @@
 """Payment execution services (PSP stub)."""
+"""Payment execution services (PSP stub)."""
 import logging
 from typing import Optional
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -17,11 +20,30 @@ from app.models import (
     PaymentStatus,
 )
 from app.services.idempotency import get_existing_by_key
+from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
 
+
+def _sum_deposits(db: Session, escrow_id: int) -> float:
+    from app.models.escrow import EscrowDeposit
+
+    stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0.0)).where(EscrowDeposit.escrow_id == escrow_id)
+    return float(db.scalar(stmt) or 0.0)
+
+
+def _sum_payments(db: Session, escrow_id: int) -> float:
+    stmt = select(func.coalesce(func.sum(Payment.amount), 0.0)).where(Payment.escrow_id == escrow_id)
+    return float(db.scalar(stmt) or 0.0)
+
+
+def available_balance(db: Session, escrow_id: int) -> float:
+    """Return the remaining balance available for payouts on the escrow."""
+
+    return _sum_deposits(db, escrow_id) - _sum_payments(db, escrow_id)
+  
 def _escrow_available(db: Session, escrow_id: int) -> float:
     """Dépôts confirmés – paiements déjà envoyés."""
     deposited = float(

@@ -162,6 +162,8 @@ async def test_photo_with_untrusted_source_requires_review(client, auth_headers,
     body = resp.json()
     assert body["status"] == "PENDING"
     assert body["metadata"]["review_reason"] == "UNTRUSTED_SOURCE"
+    assert "review_reasons" in body["metadata"]
+    assert "untrusted_source" in body["metadata"]["review_reasons"]
 
     db_session.refresh(milestone)
     assert milestone.status == MilestoneStatus.PENDING_REVIEW

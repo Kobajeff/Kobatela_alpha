@@ -1,4 +1,3 @@
-# app/services/milestones.py
 """Milestone utility services."""
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,7 +21,10 @@ def get_current_open_milestone(db: Session, escrow_id: int) -> Milestone | None:
     )
     return db.scalars(stmt).first()
 
+
 def all_milestones_paid(db: Session, escrow_id: int) -> bool:
+    """Return True when all milestones for an escrow are marked as paid."""
+
     stmt = select(Milestone).where(Milestone.escrow_id == escrow_id)
     items = list(db.scalars(stmt).all())
     return len(items) > 0 and all(m.status == MilestoneStatus.PAID for m in items)

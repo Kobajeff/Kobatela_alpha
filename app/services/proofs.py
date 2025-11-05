@@ -22,6 +22,7 @@ from app.services import (
     payments as payments_service,
     rules as rules_service,
 )
+from app.services.rules import ValidationResult
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
