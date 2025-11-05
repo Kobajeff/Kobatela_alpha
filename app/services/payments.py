@@ -167,7 +167,18 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
 
 
 def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
-    """Si tous les jalons sont payés → escrow RELEASED + event."""
+    """Clôture l'escrow uniquement s'il a au moins un jalon et qu'ils sont tous payés."""
+    # Nombre total de jalons
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(Milestone).where(Milestone.escrow_id == escrow_id)
+        ) or 0
+    )
+    if total == 0:
+        # Escrow de type "usage" ou sans jalons -> ne pas clôturer
+        return
+
+    # Jalons restants à payer
     remaining = int(
         db.scalar(
             select(func.count()).select_from(Milestone).where(
@@ -176,6 +187,7 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
             )
         ) or 0
     )
+
     if remaining == 0:
         escrow = db.get(EscrowAgreement, escrow_id)
         if escrow and escrow.status != EscrowStatus.RELEASED:
@@ -188,6 +200,5 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
                     at=utcnow(),
                 )
             )
-
 
 __all__ = ["execute_payout", "execute_payment"]
