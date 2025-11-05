@@ -187,7 +187,7 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
                 action="EXECUTE_PAYOUT",
                 entity="Payment",
                 entity_id=payment.id,
-                data_json={"idempotency_key": payment.idempotency_key, "amount": payment.amount},,
+                data_json={"idempotency_key": payment.idempotency_key, "amount": payment.amount},
                 at=utcnow(),
             )
         )
