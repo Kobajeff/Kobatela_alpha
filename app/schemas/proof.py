@@ -11,7 +11,6 @@ class ProofCreate(BaseModel):
     storage_url: str = Field(min_length=1, max_length=1024)
     sha256: str = Field(min_length=1, max_length=128)
     metadata: dict | None = None
-    metadata_: dict | None = None
 
 
 class ProofRead(BaseModel):
@@ -22,13 +21,11 @@ class ProofRead(BaseModel):
     storage_url: str
     sha256: str
     metadata: dict | None = Field(default=None, validation_alias="metadata_")
-    metadata_: dict | None
     status: str
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
-    model_config = ConfigDict(from_attributes=True)
 
 
 class ProofDecision(BaseModel):

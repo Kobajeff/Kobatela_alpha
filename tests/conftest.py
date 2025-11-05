@@ -2,7 +2,10 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
@@ -18,6 +21,15 @@ from app.db import get_db  # noqa: E402
 engine = create_engine(os.environ["DATABASE_URL"], connect_args={"check_same_thread": False}, future=True)
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True, expire_on_commit=False)
 models.Base.metadata.create_all(bind=engine)
+
+
+def _run_migrations() -> None:
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+    command.upgrade(config, "head")
+
+
+_run_migrations()
 
 
 @pytest.fixture(scope="session", autouse=True)

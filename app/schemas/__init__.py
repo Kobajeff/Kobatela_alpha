@@ -4,7 +4,6 @@ from .escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate, Escr
 from .milestone import MilestoneCreate, MilestoneRead
 from .payment import PaymentRead
 from .proof import ProofCreate, ProofDecision, ProofRead
-from .proof import ProofCreate, ProofRead
 from .spend import (
     AllowedUsageCreate,
     MerchantCreate,

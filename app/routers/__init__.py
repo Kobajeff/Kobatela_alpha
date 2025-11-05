@@ -2,8 +2,6 @@
 from fastapi import APIRouter
 
 from . import alerts, escrow, health, transactions, users, spend, proofs, payments
-from . import alerts, escrow, health, transactions, users, spend
-from . import alerts, escrow, health, transactions, users
 
 
 def get_api_router() -> APIRouter:

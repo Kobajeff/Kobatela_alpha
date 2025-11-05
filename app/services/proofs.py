@@ -52,7 +52,11 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     if current.idx != milestone.idx:
         logger.info(
             "Proof submission rejected due to sequence error",
-            extra={"escrow_id": payload.escrow_id, "expected_idx": current.idx, "submitted_idx": payload.milestone_idx},
+            extra={
+                "escrow_id": payload.escrow_id,
+                "expected_idx": current.idx,
+                "submitted_idx": payload.milestone_idx,
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -62,7 +66,10 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     if milestone.status != MilestoneStatus.WAITING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=error_response("MILESTONE_NOT_WAITING", "Milestone is not waiting for a proof submission."),
+            detail=error_response(
+                "MILESTONE_NOT_WAITING",
+                "Milestone is not waiting for a proof submission.",
+            ),
         )
 
     metadata_payload = dict(payload.metadata or {})
@@ -166,7 +173,6 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     else:
         db.commit()
 
-    # Final refresh + log
     db.refresh(proof)
     db.refresh(milestone)
     logger.info(
@@ -213,22 +219,6 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     proof.status = "APPROVED"
     milestone.status = MilestoneStatus.APPROVED
 
-    # Ensure idempotent payment creation
-    payment_key = _milestone_payment_key(escrow.id, milestone.id, milestone.amount)
-    payment = get_existing_by_key(db, Payment, payment_key)
-    if payment is None:
-        payment = Payment(
-            escrow_id=proof.escrow_id,
-            milestone_id=milestone.id,
-            amount=milestone.amount,
-            status=PaymentStatus.INITIATED,
-            idempotency_key=payment_key,
-        )
-        db.add(payment)
-        db.flush()
-    else:
-        logger.info("Reusing existing payment for milestone", extra={"payment_id": payment.id})
-
     db.add(
         AuditLog(
             actor="system",
@@ -241,7 +231,7 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     )
 
     try:
-        payments_service.execute_payout(
+        payment = payments_service.execute_payout(
             db,
             escrow=escrow,
             milestone=milestone,
@@ -313,6 +303,52 @@ def reject_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proo
     )
     return proof
 
+
+def _get_proof_or_404(db: Session, proof_id: int) -> Proof:
+    proof = db.get(Proof, proof_id)
+    if proof is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("PROOF_NOT_FOUND", "Proof not found."),
+        )
+    return proof
+
+
+def _get_milestone_by_idx(db: Session, escrow_id: int, milestone_idx: int) -> Milestone | None:
+    stmt = select(Milestone).where(Milestone.escrow_id == escrow_id, Milestone.idx == milestone_idx)
+    return db.scalars(stmt).first()
+
+
+def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: float) -> str:
+    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount}"
+
+
+def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:
+    next_milestone = milestones_service.open_next_waiting_milestone(db, escrow.id)
+    if next_milestone:
+        logger.info(
+            "Next milestone available",
+            extra={
+                "escrow_id": escrow.id,
+                "milestone_id": next_milestone.id,
+                "status": next_milestone.status.value,
+            },
+        )
+
+    if milestones_service.all_milestones_paid(db, escrow.id):
+        if escrow.status != EscrowStatus.RELEASED:
+            escrow.status = EscrowStatus.RELEASED
+            db.add(
+                EscrowEvent(
+                    escrow_id=escrow.id,
+                    kind="CLOSED",
+                    data_json={"reason": "all_milestones_paid"},
+                    at=utcnow(),
+                )
+            )
+            db.commit()
+            db.refresh(escrow)
+            logger.info("Escrow closed after all milestones paid", extra={"escrow_id": escrow.id})
 
 
 __all__ = ["submit_proof", "approve_proof", "reject_proof"]

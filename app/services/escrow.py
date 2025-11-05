@@ -139,7 +139,6 @@ def client_reject(db: Session, escrow_id: int, payload: EscrowActionPayload | No
         escrow_id=agreement.id,
         kind="CLIENT_REJECTED",
         data_json={"note": (payload.note if payload else None)},
-
         at=utcnow(),
     )
     db.add(event)
