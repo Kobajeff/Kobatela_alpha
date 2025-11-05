@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from app.models.milestone import Milestone, MilestoneStatus
 
-
 _OPEN_STATES = (
     MilestoneStatus.WAITING,
     MilestoneStatus.PENDING_REVIEW,
@@ -13,9 +12,7 @@ _OPEN_STATES = (
     MilestoneStatus.PAYING,
 )
 
-
 def get_current_open_milestone(db: Session, escrow_id: int) -> Milestone | None:
-    """Return the earliest milestone that is not yet fully paid (first in open states)."""
     stmt = (
         select(Milestone)
         .where(Milestone.escrow_id == escrow_id)
@@ -25,16 +22,12 @@ def get_current_open_milestone(db: Session, escrow_id: int) -> Milestone | None:
     )
     return db.scalars(stmt).first()
 
-
 def all_milestones_paid(db: Session, escrow_id: int) -> bool:
-    """Return True when all milestones for an escrow are marked as PAID."""
     stmt = select(Milestone).where(Milestone.escrow_id == escrow_id)
     items = list(db.scalars(stmt).all())
     return len(items) > 0 and all(m.status == MilestoneStatus.PAID for m in items)
 
-
 def open_next_waiting_milestone(db: Session, escrow_id: int) -> Milestone | None:
-    """Return the next milestone that is still open (first in open states by idx)."""
     stmt = (
         select(Milestone)
         .where(Milestone.escrow_id == escrow_id, Milestone.status.in_(_OPEN_STATES))
@@ -42,6 +35,5 @@ def open_next_waiting_milestone(db: Session, escrow_id: int) -> Milestone | None
         .limit(1)
     )
     return db.scalars(stmt).first()
-
 
 __all__ = ["all_milestones_paid", "get_current_open_milestone", "open_next_waiting_milestone"]
