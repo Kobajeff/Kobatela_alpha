@@ -79,15 +79,36 @@ def execute_payout(
     """
     # Idempotence : réutilisation
     payment = get_existing_by_key(db, Payment, idempotency_key)
-    if payment:
-        logger.info("Reusing existing payment", extra={"payment_id": payment.id})
-        if payment.status != PaymentStatus.SENT:
-            payment.status = PaymentStatus.SENT
-            payment.psp_ref = payment.psp_ref or f"PSP-{payment.id}"
-            if milestone and milestone.status != MilestoneStatus.PAID:
-                milestone.status = MilestoneStatus.PAID
-            db.commit()
-        return payment
+   if payment:
+    logger.info("Reusing existing payment", extra={"payment_id": payment.id})
+    if payment.status != PaymentStatus.SENT:
+        payment.status = PaymentStatus.SENT
+        payment.psp_ref = payment.psp_ref or f"PSP-{payment.id}"
+        if milestone and milestone.status != MilestoneStatus.PAID:
+            milestone.status = MilestoneStatus.PAID
+        db.commit()
+    return payment
+
+# 🔁 Fallback d'idempotence par triplet (escrow, milestone, amount)
+fallback = db.scalars(
+    select(Payment).where(
+        Payment.escrow_id == escrow.id,
+        Payment.milestone_id == (milestone.id if milestone else None),
+        Payment.amount == amount,
+        Payment.status == PaymentStatus.SENT,
+    )
+).first()
+if fallback:
+    logger.info(
+        "Reusing existing payment by fallback",
+        extra={"payment_id": fallback.id, "escrow_id": escrow.id, "milestone_id": getattr(milestone, "id", None)},
+    )
+    # Optionnel: rattacher la clé idem manquante pour futures recherches
+    if not fallback.idempotency_key:
+        fallback.idempotency_key = idempotency_key
+        db.add(fallback)
+        db.commit()
+    return fallback
 
     # Solde séquestre
     available = _escrow_available(db, escrow.id)
