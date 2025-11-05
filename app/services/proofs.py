@@ -97,10 +97,19 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             max_skew_minutes=120,
         )
         if not ok:
-            logger.info(
-                "Photo proof metadata requires manual handling",
-                extra={"reason": reason, "escrow_id": payload.escrow_id, "milestone_id": milestone.id},
-            )
+    logger.info(
+        "Photo proof metadata requires manual handling",
+        extra={"reason": reason, "escrow_id": payload.escrow_id, "milestone_id": milestone.id},
+    )
+    # Provide both a single UPPERCASE reason and a list of lowercase reasons for tests
+    if reason:
+        metadata_payload["review_reasons"] = [reason.lower()]
+        metadata_payload["review_reason"] = reason
+
+    if reason == "OUT_OF_GEOFENCE":
+        review_reason = reason
+    else:
+        auto_approve = False
             if reason == "OUT_OF_GEOFENCE":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
