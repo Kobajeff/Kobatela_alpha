@@ -15,58 +15,106 @@ from math import asin, cos, radians, sin, sqrt
 logger = logging.getLogger(__name__)
 
 
-def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Return distance in meters between two latitude/longitude points."""
+class Decision(str, Enum):
+    """Possible outcomes for rule evaluation."""
 
-    r_earth = 6_371_000.0
-    p = radians
-    dlat = p(lat2 - lat1)
-    dlon = p(lon2 - lon1)
-    a = sin(dlat / 2) ** 2 + cos(p(lat1)) * cos(p(lat2)) * sin(dlon / 2) ** 2
-    return 2 * r_earth * asin(sqrt(a))
+    APPROVE = "APPROVE"
+    PENDING = "PENDING"
+    REJECT = "REJECT"
+
+
+@dataclass(slots=True)
+class RuleContext:
+    """Holds tolerance parameters for rule evaluation."""
+
+    max_photo_age: timedelta = timedelta(minutes=10)
+    geofence_tolerance_m: float = 15.0
+    trusted_sources: set[str] = field(default_factory=lambda: {"app"})
+
+
+@dataclass(slots=True)
+class ValidationResult:
+    """Encapsulates the rule engine decision and reasons."""
+
+    decision: Decision
+    reasons: list[str] = field(default_factory=list)
+
+    @property
+    def is_approved(self) -> bool:
+        return self.decision == Decision.APPROVE
+
+    @property
+    def is_pending(self) -> bool:
+        return self.decision == Decision.PENDING
+
+    @property
+    def is_rejected(self) -> bool:
+        return self.decision == Decision.REJECT
 
 
 def validate_photo_metadata(
-    *, metadata: dict, geofence: tuple[float, float, float] | None, max_skew_minutes: int = 120
-) -> tuple[bool, str | None]:
-    """Validate EXIF metadata for a photo proof.
+    *, metadata: dict[str, Any], milestone: Milestone, ctx: RuleContext | None = None
+) -> ValidationResult:
+    """Validate EXIF, GPS, and source hints for a photo proof."""
 
-    Returns a tuple ``(ok, reason_if_not_ok)``.
-    """
+    ctx = ctx or RuleContext()
+    reasons: list[str] = []
 
-    ts = metadata.get("exif_timestamp")
-    lat = metadata.get("gps_lat")
-    lng = metadata.get("gps_lng")
-    source = metadata.get("source")
-
+    timestamp_raw = metadata.get("exif_timestamp")
     try:
-        ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
-    except Exception:  # pragma: no cover - defensive against malformed timestamps
-        ts_dt = None
+        timestamp = parse_iso_utc(timestamp_raw) if timestamp_raw else None
+    except Exception:  # pragma: no cover - defensive against malformed input
+        timestamp = None
 
-    now = datetime.now(tz=UTC)
-    if not ts_dt or abs((now - ts_dt).total_seconds()) > max_skew_minutes * 60:
-        logger.info("Photo metadata failed time skew validation", extra={"reason": "TIME_SKEW_OR_MISSING_EXIF"})
-        return False, "TIME_SKEW_OR_MISSING_EXIF"
+    if timestamp is None:
+        logger.info("Photo metadata missing or invalid timestamp", extra={"reason": "missing_or_bad_timestamp"})
+        return ValidationResult(Decision.PENDING, ["missing_or_bad_timestamp"])
 
-    if geofence is not None:
-        if lat is None or lng is None:
-            logger.info("Photo metadata missing GPS for geofence", extra={"reason": "MISSING_GPS"})
-            return False, "MISSING_GPS"
-        lat0, lng0, radius_m = geofence
-        dist = _haversine_m(lat0, lng0, float(lat), float(lng))
-        if dist > float(radius_m):
-            logger.info(
-                "Photo metadata outside geofence",
-                extra={"reason": "OUT_OF_GEOFENCE", "distance_m": dist, "radius_m": radius_m},
-            )
-            return False, "OUT_OF_GEOFENCE"
+    now = datetime.now(timezone.utc)
+    age = now - timestamp
+    if age < timedelta(0) or age > ctx.max_photo_age:
+        logger.info(
+            "Photo metadata outside freshness window",
+            extra={"reason": "stale_or_future_timestamp", "age_seconds": age.total_seconds()},
+        )
+        reasons.append("stale_or_future_timestamp")
 
-    if source not in ("camera", "app"):
-        logger.info("Photo metadata has untrusted source", extra={"reason": "UNTRUSTED_SOURCE", "source": source})
-        return False, "UNTRUSTED_SOURCE"
+    lat, lng, radius = milestone.geofence_lat, milestone.geofence_lng, milestone.geofence_radius_m
+    gps_lat = metadata.get("gps_lat")
+    gps_lng = metadata.get("gps_lng")
 
-    return True, None
+    if lat is not None and lng is not None and radius is not None:
+        if gps_lat is None or gps_lng is None:
+            logger.info("Photo metadata missing GPS for geofence", extra={"reason": "missing_gps_for_geofence"})
+            reasons.append("missing_gps_for_geofence")
+        else:
+            distance = haversine_m(float(lat), float(lng), float(gps_lat), float(gps_lng))
+            if distance > float(radius) + ctx.geofence_tolerance_m:
+                logger.info(
+                    "Photo metadata outside geofence",
+                    extra={
+                        "reason": "outside_geofence",
+                        "distance_m": distance,
+                        "radius_m": float(radius),
+                        "tolerance_m": ctx.geofence_tolerance_m,
+                    },
+                )
+                return ValidationResult(Decision.REJECT, ["outside_geofence"])
+
+    source = (metadata.get("source") or "").strip().lower()
+    if source and source not in ctx.trusted_sources:
+        logger.info("Photo metadata from untrusted source", extra={"reason": "untrusted_source", "source": source})
+        reasons.append("untrusted_source")
+
+    if any(reason in {"stale_or_future_timestamp", "missing_gps_for_geofence", "untrusted_source"} for reason in reasons):
+        return ValidationResult(Decision.PENDING, reasons)
+
+    return ValidationResult(Decision.APPROVE, reasons)
 
 
-__all__ = ["_haversine_m", "validate_photo_metadata"]
+__all__ = [
+    "Decision",
+    "RuleContext",
+    "ValidationResult",
+    "validate_photo_metadata",
+]

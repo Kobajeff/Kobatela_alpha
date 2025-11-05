@@ -58,7 +58,7 @@ def test_create_milestone_proof_payment(db_session):
         milestone_id=milestone.id,
         amount=500.0,
         psp_ref="PSP123",
-        status=PaymentStatus.INITIATED,
+        status=PaymentStatus.PENDING,
         idempotency_key="pay-1",
     )
     db_session.add(payment)

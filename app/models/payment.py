@@ -10,9 +10,11 @@ from .base import Base
 class PaymentStatus(str, enum.Enum):
     """Possible statuses for a payment."""
 
-    INITIATED = "INITIATED"
+    PENDING = "PENDING"
     SENT = "SENT"
+    SETTLED = "SETTLED"
     ERROR = "ERROR"
+    REFUNDED = "REFUNDED"
 
 
 class Payment(Base):
@@ -24,7 +26,7 @@ class Payment(Base):
     milestone_id: Mapped[int | None] = mapped_column(ForeignKey("milestones.id"), nullable=True, index=True)
     amount: Mapped[float] = mapped_column(Float(asdecimal=False), nullable=False)
     psp_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    status: Mapped[PaymentStatus] = mapped_column(SqlEnum(PaymentStatus), nullable=False, default=PaymentStatus.INITIATED)
+    status: Mapped[PaymentStatus] = mapped_column(SqlEnum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
 
     milestone = relationship("Milestone")

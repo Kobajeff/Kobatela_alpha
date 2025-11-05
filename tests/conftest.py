@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///./kobatella_test.db")
 os.environ.setdefault("API_KEY", "test-secret-key")
+os.environ.setdefault("PSP_WEBHOOK_SECRET", "test-psp-secret")
 
 from app.main import app  # noqa: E402
 from app import models  # noqa: E402

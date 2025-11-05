@@ -9,6 +9,7 @@ from .escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
 from .milestone import Milestone, MilestoneStatus
 from .payment import Payment, PaymentStatus
 from .proof import Proof
+from .psp_webhook import PSPWebhookEvent
 from .transaction import Transaction, TransactionStatus
 from .spend import AllowedUsage, Merchant, Purchase, PurchaseStatus, SpendCategory
 from .user import User
@@ -29,6 +30,7 @@ __all__ = [
     "MilestoneStatus",
     "Payment",
     "PaymentStatus",
+    "PSPWebhookEvent",
     "Proof",
     "Transaction",
     "TransactionStatus",
