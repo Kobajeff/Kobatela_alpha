@@ -107,7 +107,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
                 metadata_payload["review_reason"] = reason
         
     
-             if reason == "OUT_OF_GEOFENCE":
+            if reason == "OUT_OF_GEOFENCE":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
