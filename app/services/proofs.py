@@ -12,6 +12,8 @@ from app.models import (
     EscrowStatus,
     Milestone,
     MilestoneStatus,
+    Payment,
+    PaymentStatus,
     Proof,
 )
 from app.schemas.proof import ProofCreate
@@ -21,6 +23,7 @@ from app.services import (
     rules as rules_service,
 )
 from app.services.rules import ValidationResult
+from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -71,90 +74,63 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         )
 
     metadata_payload = dict(payload.metadata or {})
-    result: ValidationResult | None = None
+    review_reason: str | None = None
     auto_approve = False
 
-    proof_status = "PENDING"
-    milestone.status = MilestoneStatus.PENDING_REVIEW
-
+    # Light rules (PHOTO case -> EXIF/GPS/time checks)
     if milestone.proof_type == "PHOTO":
-        result = rules_service.validate_photo_metadata(metadata=metadata_payload, milestone=milestone)
-        logger.info(
-            "Photo proof evaluated",
-            extra={
-                "escrow_id": payload.escrow_id,
-                "milestone_id": milestone.id,
-                "decision": result.decision.value,
-                "reasons": result.reasons,
-            },
-        )
+        geofence = None
+        if (
+            getattr(milestone, "geofence_lat", None) is not None
+            and getattr(milestone, "geofence_lng", None) is not None
+            and getattr(milestone, "geofence_radius_m", None) is not None
+        ):
+            geofence = (
+                float(milestone.geofence_lat),
+                float(milestone.geofence_lng),
+                float(milestone.geofence_radius_m),
+            )
 
-        if result.is_rejected:
-            if "outside_geofence" in result.reasons:
+        ok, reason = rules_service.validate_photo_metadata(
+            metadata=metadata_payload,
+            geofence=geofence,
+            max_skew_minutes=120,
+        )
+        if not ok:
+            logger.info(
+                "Photo proof metadata requires manual handling",
+                extra={"reason": reason, "escrow_id": payload.escrow_id, "milestone_id": milestone.id},
+            )
+            if reason == "OUT_OF_GEOFENCE":
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
                 )
-            logger.info(
-                "Photo proof rejected by rules",
-                extra={"escrow_id": payload.escrow_id, "milestone_id": milestone.id, "reasons": result.reasons},
-            )
-            proof_status = "REJECTED"
-            milestone.status = MilestoneStatus.REJECTED
-        elif result.is_pending:
-            if result.reasons:
-                metadata_payload["review_reasons"] = result.reasons
-                preferred_reason = next(
-                    (reason for reason in result.reasons if reason == "untrusted_source"),
-                    result.reasons[0],
-                )
-                metadata_payload["review_reason"] = preferred_reason.upper()
+            review_reason = reason
         else:
             auto_approve = True
-            proof_status = "APPROVED"
-            milestone.status = MilestoneStatus.APPROVED
 
-    if result is None and milestone.proof_type != "PHOTO":
-        logger.info(
-            "Non-photo proof submitted",
-            extra={"escrow_id": payload.escrow_id, "milestone_id": milestone.id},
-        )
+    if review_reason is not None:
+        metadata_payload["review_reason"] = review_reason
 
+    # State transitions for milestone + proof
+    proof_status = "APPROVED" if auto_approve else "PENDING"
+    milestone.status = MilestoneStatus.APPROVED if auto_approve else MilestoneStatus.PENDING_REVIEW
+
+    # Create the proof (single, clean constructor)
     proof = Proof(
         escrow_id=payload.escrow_id,
         milestone_id=milestone.id,
-        metadata_=metadata_payload or None,
         type=payload.type,
         storage_url=payload.storage_url,
         sha256=payload.sha256,
+        metadata_=metadata_payload or None,  # NOTE: column is metadata_
         status=proof_status,
         created_at=utcnow(),
     )
-
-    if proof.status == "REJECTED":
-        db.add(proof)
-        db.flush()
-        db.add(
-            AuditLog(
-                actor="system",
-                action="SUBMIT_PROOF",
-                entity="Proof",
-                entity_id=proof.id,
-                data_json=payload.model_dump(),
-                at=utcnow(),
-            )
-        )
-        db.commit()
-        db.refresh(proof)
-        db.refresh(milestone)
-        logger.info(
-            "Proof rejected without payout",
-            extra={"proof_id": proof.id, "milestone_id": milestone.id, "reasons": getattr(result, "reasons", [])},
-        )
-        return proof
-
     db.add(proof)
     db.flush()
+
     db.add(
         AuditLog(
             actor="system",
@@ -208,7 +184,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "escrow_id": payload.escrow_id,
             "milestone_status": milestone.status.value,
             "auto_approved": auto_approve,
-            "payment_id": getattr(payment, "id", None),
+            "payment_id": getattr(payment, "id", None) if payment else None,
         },
     )
     return proof
@@ -256,12 +232,14 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     )
 
     try:
+        # Idempotency key for this escrow/milestone payout
+        payment_key = f"escrow:{escrow.id}:milestone:{milestone.id}:amount:{milestone.amount:.2f}"
         payment = payments_service.execute_payout(
             db,
             escrow=escrow,
             milestone=milestone,
             amount=milestone.amount,
-            idempotency_key=_milestone_payment_key(escrow.id, milestone.id, milestone.amount),
+            idempotency_key=payment_key,
         )
     except ValueError as exc:
         db.rollback()
