@@ -231,6 +231,8 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     )
 
     try:
+        # Idempotency key for this escrow/milestone payout
+        payment_key = f"escrow:{escrow.id}:milestone:{milestone.id}:amount:{milestone.amount:.2f}"
         payment = payments_service.execute_payout(
             db,
             escrow=escrow,
