@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, status , HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
