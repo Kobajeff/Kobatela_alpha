@@ -79,7 +79,7 @@ def execute_payout(
     """
     # Idempotence : réutilisation
     payment = get_existing_by_key(db, Payment, idempotency_key)
-       if payment:
+    if payment:
         logger.info("Reusing existing payment", extra={"payment_id": payment.id})
         if payment.status != PaymentStatus.SENT:
             payment.status = PaymentStatus.SENT
@@ -88,7 +88,7 @@ def execute_payout(
                 milestone.status = MilestoneStatus.PAID
             db.commit()
         return payment
-    
+
     # 🔁 Fallback d'idempotence par triplet (escrow, milestone, amount)
     fallback = db.scalars(
         select(Payment).where(
@@ -109,9 +109,9 @@ def execute_payout(
             db.add(fallback)
             db.commit()
         return fallback
-    
-        # Solde séquestre
-        available = _escrow_available(db, escrow.id)
+
+    # Solde séquestre
+    available = _escrow_available(db, escrow.id)
     if amount > available + 1e-9:
         raise ValueError(f"Insufficient escrow balance: need {amount}, available {available}")
 
@@ -161,6 +161,7 @@ def execute_payout(
             )
             return existing
         raise
+
 
 
 def execute_payment(db: Session, payment_id: int) -> Payment:
