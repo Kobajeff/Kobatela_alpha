@@ -112,7 +112,8 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
                         )
-                    review_reason = reason
+            else:
+                review_reason = reason
         else:
              auto_approve = True
 
