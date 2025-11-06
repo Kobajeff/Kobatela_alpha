@@ -87,7 +87,6 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
         event = EscrowEvent(
             escrow_id=agreement.id,
             kind="DEPOSIT",
-            idempotency_key=idempotency_key,
             data_json=event_payload,
             at=utcnow(),
         )
