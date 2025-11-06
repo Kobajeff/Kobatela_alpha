@@ -1,10 +1,3 @@
-<<<<<<< HEAD
-"""Idempotency helpers."""
-from typing import Optional, Type, TypeVar
-
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-=======
 # app/services/idempotency.py
 """Idempotency helpers."""
 from typing import Optional, Type, TypeVar, Callable
@@ -12,19 +5,10 @@ from typing import Optional, Type, TypeVar, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
->>>>>>> origin/main
 
 T = TypeVar("T")
 
 
-<<<<<<< HEAD
-def get_existing_by_key(db: Session, model: Type[T], key_value: str, *, key_field: str = "idempotency_key") -> Optional[T]:
-    """Return existing record for a given idempotency key if present."""
-
-    column = getattr(model, key_field)
-    stmt = select(model).where(column == key_value)
-    return db.scalars(stmt).first()
-=======
 def get_existing_by_key(
     db: Session,
     model: Type[T],
@@ -65,4 +49,3 @@ def get_or_create_idempotent(
         db.rollback()
         # Course condition → re-read existing
         return get_existing_by_key(db, model, key_value, key_field=key_field)
->>>>>>> origin/main

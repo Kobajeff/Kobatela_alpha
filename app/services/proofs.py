@@ -1,9 +1,6 @@
 """Proof lifecycle services."""
 import logging
-<<<<<<< HEAD
 from decimal import Decimal
-=======
->>>>>>> origin/main
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -16,11 +13,8 @@ from app.models import (
     EscrowStatus,
     Milestone,
     MilestoneStatus,
-<<<<<<< HEAD
-=======
     Payment,
     PaymentStatus,
->>>>>>> origin/main
     Proof,
 )
 from app.schemas.proof import ProofCreate
@@ -29,18 +23,11 @@ from app.services import (
     payments as payments_service,
     rules as rules_service,
 )
-<<<<<<< HEAD
-from app.services.rules import ValidationResult
-from app.utils.errors import error_response
-from app.utils.time import utcnow
-
-=======
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 
->>>>>>> origin/main
 logger = logging.getLogger(__name__)
 
 
@@ -88,92 +75,6 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         )
 
     metadata_payload = dict(payload.metadata or {})
-<<<<<<< HEAD
-    result: ValidationResult | None = None
-    auto_approve = False
-
-    proof_status = "PENDING"
-    milestone.status = MilestoneStatus.PENDING_REVIEW
-
-    if milestone.proof_type == "PHOTO":
-        result = rules_service.validate_photo_metadata(metadata=metadata_payload, milestone=milestone)
-        logger.info(
-            "Photo proof evaluated",
-            extra={
-                "escrow_id": payload.escrow_id,
-                "milestone_id": milestone.id,
-                "decision": result.decision.value,
-                "reasons": result.reasons,
-            },
-        )
-
-        if result.is_rejected:
-            if "outside_geofence" in result.reasons:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
-                )
-            logger.info(
-                "Photo proof rejected by rules",
-                extra={"escrow_id": payload.escrow_id, "milestone_id": milestone.id, "reasons": result.reasons},
-            )
-            proof_status = "REJECTED"
-            milestone.status = MilestoneStatus.REJECTED
-        elif result.is_pending:
-            if result.reasons:
-                metadata_payload["review_reasons"] = result.reasons
-                preferred_reason = next(
-                    (reason for reason in result.reasons if reason == "untrusted_source"),
-                    result.reasons[0],
-                )
-                metadata_payload["review_reason"] = preferred_reason.upper()
-        else:
-            auto_approve = True
-            proof_status = "APPROVED"
-            milestone.status = MilestoneStatus.APPROVED
-
-    if result is None and milestone.proof_type != "PHOTO":
-        logger.info(
-            "Non-photo proof submitted",
-            extra={"escrow_id": payload.escrow_id, "milestone_id": milestone.id},
-        )
-
-    proof = Proof(
-        escrow_id=payload.escrow_id,
-        milestone_id=milestone.id,
-        metadata_=metadata_payload or None,
-        type=payload.type,
-        storage_url=payload.storage_url,
-        sha256=payload.sha256,
-        status=proof_status,
-        created_at=utcnow(),
-    )
-
-    if proof.status == "REJECTED":
-        db.add(proof)
-        db.flush()
-        db.add(
-            AuditLog(
-                actor="system",
-                action="SUBMIT_PROOF",
-                entity="Proof",
-                entity_id=proof.id,
-                data_json=payload.model_dump(),
-                at=utcnow(),
-            )
-        )
-        db.commit()
-        db.refresh(proof)
-        db.refresh(milestone)
-        logger.info(
-            "Proof rejected without payout",
-            extra={"proof_id": proof.id, "milestone_id": milestone.id, "reasons": getattr(result, "reasons", [])},
-        )
-        return proof
-
-    db.add(proof)
-    db.flush()
-=======
     review_reason: str | None = None
     auto_approve = False
 
@@ -238,7 +139,6 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     db.add(proof)
     db.flush()
 
->>>>>>> origin/main
     db.add(
         AuditLog(
             actor="system",
@@ -292,11 +192,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "escrow_id": payload.escrow_id,
             "milestone_status": milestone.status.value,
             "auto_approved": auto_approve,
-<<<<<<< HEAD
-            "payment_id": getattr(payment, "id", None),
-=======
             "payment_id": getattr(payment, "id", None) if payment else None,
->>>>>>> origin/main
         },
     )
     return proof
@@ -344,21 +240,14 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     )
 
     try:
-<<<<<<< HEAD
-=======
         # Idempotency key for this escrow/milestone payout
         payment_key = f"escrow:{escrow.id}:milestone:{milestone.id}:amount:{milestone.amount:.2f}"
->>>>>>> origin/main
         payment = payments_service.execute_payout(
             db,
             escrow=escrow,
             milestone=milestone,
             amount=milestone.amount,
-<<<<<<< HEAD
-            idempotency_key=_milestone_payment_key(escrow.id, milestone.id, milestone.amount),
-=======
             idempotency_key=payment_key,
->>>>>>> origin/main
         )
     except ValueError as exc:
         db.rollback()
@@ -441,13 +330,8 @@ def _get_milestone_by_idx(db: Session, escrow_id: int, milestone_idx: int) -> Mi
     return db.scalars(stmt).first()
 
 
-<<<<<<< HEAD
 def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: Decimal) -> str:
     return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount:.2f}"
-=======
-def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: float) -> str:
-    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount}"
->>>>>>> origin/main
 
 
 def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:
