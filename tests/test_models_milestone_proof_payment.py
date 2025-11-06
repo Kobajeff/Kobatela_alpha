@@ -1,9 +1,5 @@
 """Tests for milestone, proof, and payment models."""
 from datetime import UTC, datetime
-<<<<<<< HEAD
-from decimal import Decimal
-=======
->>>>>>> origin/main
 
 from app.models import (
     EscrowAgreement,
@@ -25,11 +21,7 @@ def test_create_milestone_proof_payment(db_session):
     escrow = EscrowAgreement(
         client_id=client.id,
         provider_id=provider.id,
-<<<<<<< HEAD
-        amount_total=Decimal("1000.00"),
-=======
         amount_total=1000.0,
->>>>>>> origin/main
         currency="USD",
         status=EscrowStatus.DRAFT,
         release_conditions_json={"type": "milestone"},
@@ -42,11 +34,7 @@ def test_create_milestone_proof_payment(db_session):
         escrow_id=escrow.id,
         idx=1,
         label="Initial milestone",
-<<<<<<< HEAD
-        amount=Decimal("500.00"),
-=======
         amount=500.0,
->>>>>>> origin/main
         proof_type="SIGNED_CONTRACT",
         validator="SENDER",
     )
@@ -68,11 +56,7 @@ def test_create_milestone_proof_payment(db_session):
     payment = Payment(
         escrow_id=escrow.id,
         milestone_id=milestone.id,
-<<<<<<< HEAD
-        amount=Decimal("500.00"),
-=======
         amount=500.0,
->>>>>>> origin/main
         psp_ref="PSP123",
         status=PaymentStatus.PENDING,
         idempotency_key="pay-1",
