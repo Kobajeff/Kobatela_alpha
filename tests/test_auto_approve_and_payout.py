@@ -1,6 +1,9 @@
 """Tests covering auto-approval and payout idempotency flows."""
 from datetime import UTC, datetime, timedelta
+<<<<<<< HEAD
 from decimal import Decimal
+=======
+>>>>>>> origin/main
 
 import pytest
 from sqlalchemy import select
@@ -64,7 +67,11 @@ async def test_auto_approve_photo_triggers_payout(client, auth_headers, db_sessi
         escrow_id=escrow_id,
         idx=1,
         label="Design delivery",
+<<<<<<< HEAD
         amount=Decimal("250.00"),
+=======
+        amount=250.0,
+>>>>>>> origin/main
         proof_type="PHOTO",
         validator="SENDER",
         geofence_lat=5.3210,
@@ -104,7 +111,11 @@ async def test_auto_approve_photo_triggers_payout(client, auth_headers, db_sessi
 
     payment = db_session.scalars(select(Payment).where(Payment.milestone_id == milestone.id)).one()
     assert payment.status == PaymentStatus.SENT
+<<<<<<< HEAD
     assert payment.amount == milestone.amount
+=======
+    assert payment.amount == pytest.approx(milestone.amount)
+>>>>>>> origin/main
 
     escrow = db_session.get(EscrowAgreement, escrow_id)
     db_session.refresh(escrow)
@@ -120,7 +131,11 @@ async def test_payout_idempotency_reuses_payment(client, auth_headers, db_sessio
         escrow_id=escrow_id,
         idx=1,
         label="Implementation delivery",
+<<<<<<< HEAD
         amount=Decimal("300.00"),
+=======
+        amount=300.0,
+>>>>>>> origin/main
         proof_type="PHOTO",
         validator="SENDER",
         geofence_lat=5.0,
@@ -169,6 +184,7 @@ async def test_payout_idempotency_reuses_payment(client, auth_headers, db_sessio
 
 
 @pytest.mark.anyio("asyncio")
+<<<<<<< HEAD
 async def test_execute_payout_rejects_error_reuse(client, auth_headers, db_session):
     escrow_id = await _create_users_and_escrow(client, auth_headers)
 
@@ -214,6 +230,8 @@ async def test_execute_payout_rejects_error_reuse(client, auth_headers, db_sessi
 
 
 @pytest.mark.anyio("asyncio")
+=======
+>>>>>>> origin/main
 async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_session):
     escrow_id = await _create_users_and_escrow(client, auth_headers)
 
@@ -222,7 +240,11 @@ async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_s
             escrow_id=escrow_id,
             idx=1,
             label="Kickoff",
+<<<<<<< HEAD
             amount=Decimal("120.00"),
+=======
+            amount=120.0,
+>>>>>>> origin/main
             proof_type="PHOTO",
             validator="SENDER",
             geofence_lat=5.1,
@@ -233,7 +255,11 @@ async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_s
             escrow_id=escrow_id,
             idx=2,
             label="Development",
+<<<<<<< HEAD
             amount=Decimal("180.00"),
+=======
+            amount=180.0,
+>>>>>>> origin/main
             proof_type="PHOTO",
             validator="SENDER",
             geofence_lat=5.1,
@@ -244,7 +270,11 @@ async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_s
             escrow_id=escrow_id,
             idx=3,
             label="Launch",
+<<<<<<< HEAD
             amount=Decimal("200.00"),
+=======
+            amount=200.0,
+>>>>>>> origin/main
             proof_type="PHOTO",
             validator="SENDER",
             geofence_lat=5.1,

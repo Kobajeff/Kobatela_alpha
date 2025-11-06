@@ -1,6 +1,5 @@
 """Schemas for payment entities."""
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -11,7 +10,7 @@ class PaymentRead(BaseModel):
     id: int
     escrow_id: int
     milestone_id: int | None
-    amount: Decimal
+    amount: float
     psp_ref: str | None
     status: PaymentStatus
     idempotency_key: str | None

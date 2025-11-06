@@ -1,6 +1,5 @@
 """Payment model definitions."""
 import enum
-from decimal import Decimal
 
 from sqlalchemy import CheckConstraint, Enum as SqlEnum, ForeignKey, Index, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -15,6 +14,7 @@ class PaymentStatus(str, enum.Enum):
     SENT = "SENT"
     SETTLED = "SETTLED"
     ERROR = "ERROR"
+    REFUNDED = "REFUNDED"
 
 
 class Payment(Base):
@@ -30,7 +30,7 @@ class Payment(Base):
 
     escrow_id: Mapped[int] = mapped_column(ForeignKey("escrow_agreements.id"), nullable=False, index=True)
     milestone_id: Mapped[int | None] = mapped_column(ForeignKey("milestones.id"), nullable=True, index=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    amount: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False)
     psp_ref: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     status: Mapped[PaymentStatus] = mapped_column(SqlEnum(PaymentStatus), nullable=False, default=PaymentStatus.PENDING)
     idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)

@@ -1,6 +1,9 @@
 """Proof lifecycle services."""
 import logging
+<<<<<<< HEAD
 from decimal import Decimal
+=======
+>>>>>>> origin/main
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -13,6 +16,11 @@ from app.models import (
     EscrowStatus,
     Milestone,
     MilestoneStatus,
+<<<<<<< HEAD
+=======
+    Payment,
+    PaymentStatus,
+>>>>>>> origin/main
     Proof,
 )
 from app.schemas.proof import ProofCreate
@@ -21,10 +29,18 @@ from app.services import (
     payments as payments_service,
     rules as rules_service,
 )
+<<<<<<< HEAD
 from app.services.rules import ValidationResult
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
+=======
+from app.services.idempotency import get_existing_by_key
+from app.utils.errors import error_response
+from app.utils.time import utcnow
+
+
+>>>>>>> origin/main
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +88,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         )
 
     metadata_payload = dict(payload.metadata or {})
+<<<<<<< HEAD
     result: ValidationResult | None = None
     auto_approve = False
 
@@ -156,6 +173,72 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
 
     db.add(proof)
     db.flush()
+=======
+    review_reason: str | None = None
+    auto_approve = False
+
+    # Light rules (PHOTO case -> EXIF/GPS/time checks)
+    if milestone.proof_type == "PHOTO":
+        geofence = None
+        if (
+            getattr(milestone, "geofence_lat", None) is not None
+            and getattr(milestone, "geofence_lng", None) is not None
+            and getattr(milestone, "geofence_radius_m", None) is not None
+        ):
+            geofence = (
+                float(milestone.geofence_lat),
+                float(milestone.geofence_lng),
+                float(milestone.geofence_radius_m),
+            )
+
+        ok, reason = rules_service.validate_photo_metadata(
+            metadata=metadata_payload,
+            geofence=geofence,
+            max_skew_minutes=120,
+        )
+        if not ok:
+            logger.info(
+                "Photo proof metadata requires manual handling",
+                extra={"reason": reason, "escrow_id": payload.escrow_id, "milestone_id": milestone.id},
+            )
+            # Provide both a single UPPERCASE reason and a list of lowercase reasons for tests
+            if reason:
+                metadata_payload["review_reasons"] = [reason.lower()]
+                metadata_payload["review_reason"] = reason
+        
+    
+            if reason == "OUT_OF_GEOFENCE":
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
+                        )
+            else:
+                review_reason = reason
+        else:
+             auto_approve = True
+
+    if review_reason is not None:
+        metadata_payload["review_reason"] = review_reason
+
+    # State transitions for milestone + proof
+    proof_status = "APPROVED" if auto_approve else "PENDING"
+    milestone.status = MilestoneStatus.APPROVED if auto_approve else MilestoneStatus.PENDING_REVIEW
+
+    # Create the proof (single, clean constructor)
+    proof = Proof(
+        escrow_id=payload.escrow_id,
+        milestone_id=milestone.id,
+        type=payload.type,
+        storage_url=payload.storage_url,
+        sha256=payload.sha256,
+        metadata_=metadata_payload or None,  # NOTE: column is metadata_
+        status=proof_status,
+        created_at=utcnow(),
+    )
+    db.add(proof)
+    db.flush()
+
+>>>>>>> origin/main
     db.add(
         AuditLog(
             actor="system",
@@ -209,7 +292,11 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             "escrow_id": payload.escrow_id,
             "milestone_status": milestone.status.value,
             "auto_approved": auto_approve,
+<<<<<<< HEAD
             "payment_id": getattr(payment, "id", None),
+=======
+            "payment_id": getattr(payment, "id", None) if payment else None,
+>>>>>>> origin/main
         },
     )
     return proof
@@ -257,12 +344,21 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     )
 
     try:
+<<<<<<< HEAD
+=======
+        # Idempotency key for this escrow/milestone payout
+        payment_key = f"escrow:{escrow.id}:milestone:{milestone.id}:amount:{milestone.amount:.2f}"
+>>>>>>> origin/main
         payment = payments_service.execute_payout(
             db,
             escrow=escrow,
             milestone=milestone,
             amount=milestone.amount,
+<<<<<<< HEAD
             idempotency_key=_milestone_payment_key(escrow.id, milestone.id, milestone.amount),
+=======
+            idempotency_key=payment_key,
+>>>>>>> origin/main
         )
     except ValueError as exc:
         db.rollback()
@@ -345,8 +441,13 @@ def _get_milestone_by_idx(db: Session, escrow_id: int, milestone_idx: int) -> Mi
     return db.scalars(stmt).first()
 
 
+<<<<<<< HEAD
 def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: Decimal) -> str:
     return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount:.2f}"
+=======
+def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: float) -> str:
+    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount}"
+>>>>>>> origin/main
 
 
 def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:

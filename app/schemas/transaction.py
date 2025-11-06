@@ -1,6 +1,5 @@
 """Transaction schemas."""
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,7 +10,7 @@ from app.models.transaction import TransactionStatus
 class TransactionCreate(BaseModel):
     sender_id: int
     receiver_id: int
-    amount: Decimal = Field(gt=Decimal("0"))
+    amount: float = Field(gt=0)
     currency: str = Field(default="USD", pattern="^(USD|EUR)$")
 
 
@@ -19,7 +18,7 @@ class TransactionRead(BaseModel):
     id: int
     sender_id: int
     receiver_id: int
-    amount: Decimal
+    amount: float
     currency: str
     status: TransactionStatus
     created_at: datetime

@@ -1,6 +1,9 @@
 """Conditional usage spending services."""
 import logging
+<<<<<<< HEAD
 from decimal import Decimal
+=======
+>>>>>>> origin/main
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -25,8 +28,13 @@ def add_allowed_payee(
     escrow_id: int,
     payee_ref: str,
     label: str,
+<<<<<<< HEAD
     daily_limit: Decimal | None = None,
     total_limit: Decimal | None = None,
+=======
+    daily_limit: float | None = None,
+    total_limit: float | None = None,
+>>>>>>> origin/main
 ) -> AllowedPayee:
     """Register a payee that is allowed to receive conditional usage payouts."""
 
@@ -49,10 +57,14 @@ def add_allowed_payee(
         data_json={
             "escrow_id": escrow_id,
             "payee_ref": payee_ref,
+<<<<<<< HEAD
             "limits": {
                 "daily": str(daily_limit) if daily_limit is not None else None,
                 "total": str(total_limit) if total_limit is not None else None,
             },
+=======
+            "limits": {"daily": daily_limit, "total": total_limit},
+>>>>>>> origin/main
         },
         at=utcnow(),
     )
@@ -81,13 +93,21 @@ def spend_to_allowed_payee(
     *,
     escrow_id: int,
     payee_ref: str,
+<<<<<<< HEAD
     amount: Decimal,
+=======
+    amount: float,
+>>>>>>> origin/main
     idempotency_key: str,
     note: str | None = None,
 ) -> Payment:
     """Execute a payout toward an allowed payee respecting configured limits."""
 
+<<<<<<< HEAD
     if amount <= Decimal("0"):
+=======
+    if amount <= 0:
+>>>>>>> origin/main
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_response("BAD_AMOUNT", "Amount must be greater than zero."),
@@ -137,10 +157,17 @@ def spend_to_allowed_payee(
             "Resetting daily spend counters",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "previous_date": payee.last_reset_at},
         )
+<<<<<<< HEAD
         payee.spent_today = Decimal("0")
         payee.last_reset_at = today
 
     if payee.daily_limit is not None and (payee.spent_today + amount) > payee.daily_limit:
+=======
+        payee.spent_today = 0.0
+        payee.last_reset_at = today
+
+    if payee.daily_limit is not None and (payee.spent_today + amount) > payee.daily_limit + 1e-9:
+>>>>>>> origin/main
         logger.info(
             "Daily limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
@@ -150,7 +177,11 @@ def spend_to_allowed_payee(
             detail=error_response("DAILY_LIMIT_REACHED", "Daily limit would be exceeded."),
         )
 
+<<<<<<< HEAD
     if payee.total_limit is not None and (payee.spent_total + amount) > payee.total_limit:
+=======
+    if payee.total_limit is not None and (payee.spent_total + amount) > payee.total_limit + 1e-9:
+>>>>>>> origin/main
         logger.info(
             "Total limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
@@ -161,7 +192,11 @@ def spend_to_allowed_payee(
         )
 
     balance = available_balance(db, escrow_id=escrow.id)
+<<<<<<< HEAD
     if amount > balance:
+=======
+    if amount > balance + 1e-9:
+>>>>>>> origin/main
         logger.warning(
             "Insufficient escrow balance for usage spend",
             extra={"escrow_id": escrow_id, "amount": amount, "balance": balance},
@@ -188,7 +223,11 @@ def spend_to_allowed_payee(
     event_exists_stmt = select(EscrowEvent).where(
         EscrowEvent.escrow_id == escrow.id,
         EscrowEvent.kind == "USAGE_SPEND",
+<<<<<<< HEAD
         EscrowEvent.idempotency_key == idempotency_key,
+=======
+        EscrowEvent.data_json["idempotency_key"].as_string() == idempotency_key,
+>>>>>>> origin/main
     )
     if db.execute(event_exists_stmt).first():
         logger.info(
@@ -197,17 +236,28 @@ def spend_to_allowed_payee(
         )
         return payment
 
+<<<<<<< HEAD
     payee.spent_today = (payee.spent_today or Decimal("0")) + amount
     payee.spent_total = (payee.spent_total or Decimal("0")) + amount
+=======
+    payee.spent_today = float(payee.spent_today or 0.0) + amount
+    payee.spent_total = float(payee.spent_total or 0.0) + amount
+>>>>>>> origin/main
     payee.last_reset_at = today
 
     event = EscrowEvent(
         escrow_id=escrow.id,
         kind="USAGE_SPEND",
+<<<<<<< HEAD
         idempotency_key=idempotency_key,
         data_json={
             "payment_id": payment.id,
             "amount": str(amount),
+=======
+        data_json={
+            "payment_id": payment.id,
+            "amount": amount,
+>>>>>>> origin/main
             "payee_ref": payee_ref,
             "note": note,
             "idempotency_key": idempotency_key,
@@ -219,11 +269,15 @@ def spend_to_allowed_payee(
         action="USAGE_SPEND",
         entity="Payment",
         entity_id=payment.id,
+<<<<<<< HEAD
         data_json={
             "escrow_id": escrow.id,
             "payee_ref": payee_ref,
             "amount": str(amount),
         },
+=======
+        data_json={"escrow_id": escrow.id, "payee_ref": payee_ref, "amount": amount},
+>>>>>>> origin/main
         at=utcnow(),
     )
     db.add_all([payee, event, audit])

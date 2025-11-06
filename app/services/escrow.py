@@ -1,6 +1,9 @@
 """Escrow service logic."""
 import logging
+<<<<<<< HEAD
 from decimal import Decimal
+=======
+>>>>>>> origin/main
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -35,6 +38,7 @@ def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     return agreement
 
 
+<<<<<<< HEAD
 def _total_deposited(db: Session, escrow_id: int) -> Decimal:
     stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0)).where(EscrowDeposit.escrow_id == escrow_id)
     value = db.scalar(stmt)
@@ -43,6 +47,11 @@ def _total_deposited(db: Session, escrow_id: int) -> Decimal:
     if isinstance(value, Decimal):
         return value
     return Decimal(value)
+=======
+def _total_deposited(db: Session, escrow_id: int) -> float:
+    stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0.0)).where(EscrowDeposit.escrow_id == escrow_id)
+    return float(db.scalar(stmt) or 0.0)
+>>>>>>> origin/main
 
 
 def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempotency_key: str | None) -> EscrowAgreement:
@@ -67,6 +76,7 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
         if total >= agreement.amount_total:
             agreement.status = EscrowStatus.FUNDED
 
+<<<<<<< HEAD
         event_payload = {"amount": str(payload.amount)}
         if idempotency_key:
             event_payload["idempotency_key"] = idempotency_key
@@ -75,6 +85,12 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
             kind="DEPOSIT",
             idempotency_key=idempotency_key,
             data_json=event_payload,
+=======
+        event = EscrowEvent(
+            escrow_id=agreement.id,
+            kind="DEPOSIT",
+            data_json={"amount": payload.amount},
+>>>>>>> origin/main
             at=utcnow(),
         )
         db.add(event)

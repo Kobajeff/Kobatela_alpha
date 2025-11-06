@@ -28,7 +28,10 @@ app.add_middleware(
 app.include_router(get_api_router())
 
 
+<<<<<<< HEAD
 # TODO: migrate to FastAPI lifespan context instead of @app.on_event("startup")
+=======
+>>>>>>> origin/main
 @app.on_event("startup")
 def startup_event() -> None:
     """Run application startup tasks."""

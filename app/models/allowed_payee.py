@@ -1,6 +1,5 @@
 """Allowed payee model definitions."""
 from datetime import date
-from decimal import Decimal
 
 from sqlalchemy import CheckConstraint, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -24,9 +23,9 @@ class AllowedPayee(Base):
     payee_ref: Mapped[str] = mapped_column(String(120), nullable=False)
     label: Mapped[str] = mapped_column(String(200), nullable=False)
 
-    daily_limit: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
-    total_limit: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    daily_limit: Mapped[float | None] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=True)
+    total_limit: Mapped[float | None] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=True)
 
-    spent_today: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
-    spent_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False, default=Decimal("0"))
+    spent_today: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False, default=0.0)
+    spent_total: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False, default=0.0)
     last_reset_at: Mapped[date | None] = mapped_column(nullable=True)

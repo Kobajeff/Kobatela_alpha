@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -58,7 +57,7 @@ class AllowedUsageCreate(BaseModel):
 class PurchaseCreate(BaseModel):
     sender_id: int
     merchant_id: int
-    amount: Decimal = Field(gt=Decimal("0"))
+    amount: float = Field(gt=0)
     currency: str = Field(default="USD", pattern="^(USD|EUR)$")
     category_id: int | None = None
 
@@ -68,7 +67,7 @@ class PurchaseRead(BaseModel):
     sender_id: int
     merchant_id: int
     category_id: int | None
-    amount: Decimal
+    amount: float
     currency: str
     status: PurchaseStatus
     created_at: datetime
