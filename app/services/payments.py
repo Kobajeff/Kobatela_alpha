@@ -26,9 +26,12 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+def _to_decimal(x) -> Decimal:
+    if isinstance(x, Decimal):
+        return x
+    return Decimal(str(x))
 
 def _sum_deposits(db: Session, escrow_id: int) -> Decimal:
-    from app.models.escrow import EscrowDeposit
 
     stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0)).where(EscrowDeposit.escrow_id == escrow_id)
     value = db.scalar(stmt)
@@ -87,7 +90,7 @@ def execute_payout(
     idempotency_key: str,
 ) -> Payment:
     """Execute (or reuse) a payout in an idempotent fashion."""
-
+    amount = _to_decimal(amount)
     # 1) Idempotence par clé
     existing = get_existing_by_key(db, Payment, idempotency_key)
     if existing:
