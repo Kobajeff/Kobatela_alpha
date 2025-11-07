@@ -188,7 +188,7 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
         action="CREATE_PURCHASE",
         entity="Purchase",
         entity_id=purchase.id,
-        data_json=payload.model_dump(),
+        data_json=payload.model_dump(mode="json"),
         at=utcnow(),
     )
     db.add(audit)

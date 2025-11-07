@@ -1,5 +1,6 @@
 """Escrow service logic."""
 import logging
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -14,6 +15,13 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+def _to_decimal(x) -> Decimal:
+    if isinstance(x, Decimal):
+        return x
+    # avoid float binary artefacts
+    return Decimal(str(x))
+
+# app/services/escrow.py
 
 def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     """Create a new escrow agreement."""
@@ -21,7 +29,7 @@ def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     agreement = EscrowAgreement(
         client_id=payload.client_id,
         provider_id=payload.provider_id,
-        amount_total=payload.amount_total,
+        amount_total=_to_decimal(payload.amount_total),   # <-- cast ici
         currency=payload.currency,
         release_conditions_json=payload.release_conditions,
         deadline_at=payload.deadline_at,
@@ -34,9 +42,15 @@ def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     return agreement
 
 
-def _total_deposited(db: Session, escrow_id: int) -> float:
-    stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0.0)).where(EscrowDeposit.escrow_id == escrow_id)
-    return float(db.scalar(stmt) or 0.0)
+
+def _total_deposited(db: Session, escrow_id: int) -> Decimal:
+    stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0)).where(EscrowDeposit.escrow_id == escrow_id)
+    value = db.scalar(stmt)
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(value)
 
 
 def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempotency_key: str | None) -> EscrowAgreement:
@@ -53,18 +67,27 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
             db.refresh(agreement)
             return agreement
 
-    deposit = EscrowDeposit(escrow_id=agreement.id, amount=payload.amount, idempotency_key=idempotency_key)
+    # --- CAST ICI ---
+    amount_dec = _to_decimal(payload.amount)
+
+    deposit = EscrowDeposit(escrow_id=agreement.id, amount=amount_dec, idempotency_key=idempotency_key)
     try:
         db.add(deposit)
 
-        total = _total_deposited(db, agreement.id) + payload.amount
-        if total >= agreement.amount_total:
+        # --- TOUT EN DECIMAL ---
+        total = _total_deposited(db, agreement.id) + amount_dec
+        # (agreement.amount_total est Decimal si défini en Numeric(asdecimal=True); au cas où:)
+        amount_total_dec = _to_decimal(agreement.amount_total)
+        if total >= amount_total_dec:
             agreement.status = EscrowStatus.FUNDED
 
+        event_payload = {"amount": str(amount_dec)}
+        if idempotency_key:
+            event_payload["idempotency_key"] = idempotency_key
         event = EscrowEvent(
             escrow_id=agreement.id,
             kind="DEPOSIT",
-            data_json={"amount": payload.amount},
+            data_json=event_payload,
             at=utcnow(),
         )
         db.add(event)
@@ -84,6 +107,7 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
                 db.refresh(agreement)
                 return agreement
         raise
+
 
 
 def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) -> EscrowAgreement:

@@ -1,5 +1,6 @@
 """Proof lifecycle services."""
 import logging
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -329,8 +330,8 @@ def _get_milestone_by_idx(db: Session, escrow_id: int, milestone_idx: int) -> Mi
     return db.scalars(stmt).first()
 
 
-def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: float) -> str:
-    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount}"
+def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: Decimal) -> str:
+    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount:.2f}"
 
 
 def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:
