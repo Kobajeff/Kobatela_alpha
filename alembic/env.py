@@ -2,21 +2,28 @@
 from __future__ import annotations
 
 import os
-import sys 
+import sys
 from pathlib import Path
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config, pool
 from alembic import context
+from sqlalchemy import engine_from_config, pool
 
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../kobatela_alpha
+# --- Ajoute la racine du projet dans le PYTHONPATH AVANT d'importer app.*
+PROJECT_ROOT = Path(__file__).resolve().parent.parent  # .../kobatela_alpha
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-# ✅ nouveaux chemins après refactor core/
-from app.core.config import get_settings
-from app.core.database import Base
+
+# --- Imports robustes (nouveau chemin puis fallback ancien)
+try:
+    from app.core.config import get_settings        # nouveau
+except ModuleNotFoundError:
+    from app.config import get_settings             # fallback
+
+try:
+    from app.core.database import Base              # nouveau
+except ModuleNotFoundError:
+    from app.models.base import Base                # fallback
 
 
 config = context.config
