@@ -1,6 +1,6 @@
 """Escrow service logic."""
 import logging
-from decimal import Decimal , InvalidOperation
+from decimal import Decimal , InvalidOperation , ROUND_HALF_UP
 from typing import Any 
 from fastapi import HTTPException
 from sqlalchemy import func, select
