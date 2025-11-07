@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 from alembic import context
+
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../kobatela_alpha
 if str(PROJECT_ROOT) not in sys.path:
