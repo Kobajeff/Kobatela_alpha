@@ -15,6 +15,7 @@ class PaymentStatus(str, enum.Enum):
     SENT = "SENT"
     SETTLED = "SETTLED"
     ERROR = "ERROR"
+    REFUNDED = "REFUNDED"
 
 
 class Payment(Base):

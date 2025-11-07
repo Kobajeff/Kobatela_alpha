@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from enum import Enum
+from datetime import datetime, timedelta, UTC
 from typing import Any
 
 from app.models.milestone import Milestone
@@ -14,106 +12,99 @@ from app.utils.time import parse_iso_utc
 logger = logging.getLogger(__name__)
 
 
-class Decision(str, Enum):
-    """Possible outcomes for rule evaluation."""
-
-    APPROVE = "APPROVE"
-    PENDING = "PENDING"
-    REJECT = "REJECT"
-
-
-@dataclass(slots=True)
-class RuleContext:
-    """Holds tolerance parameters for rule evaluation."""
-
-    max_photo_age: timedelta = timedelta(minutes=10)
-    geofence_tolerance_m: float = 15.0
-    trusted_sources: set[str] = field(default_factory=lambda: {"app"})
-
-
-@dataclass(slots=True)
-class ValidationResult:
-    """Encapsulates the rule engine decision and reasons."""
-
-    decision: Decision
-    reasons: list[str] = field(default_factory=list)
-
-    @property
-    def is_approved(self) -> bool:
-        return self.decision == Decision.APPROVE
-
-    @property
-    def is_pending(self) -> bool:
-        return self.decision == Decision.PENDING
-
-    @property
-    def is_rejected(self) -> bool:
-        return self.decision == Decision.REJECT
-
-
 def validate_photo_metadata(
-    *, metadata: dict[str, Any], milestone: Milestone, ctx: RuleContext | None = None
-) -> ValidationResult:
-    """Validate EXIF, GPS, and source hints for a photo proof."""
+    *,
+    metadata: dict[str, Any],
+    milestone: Milestone | None = None,
+    max_age_minutes: int = 10,
+    future_tolerance_minutes: int = 2,
+    geofence_tolerance_m: float = 15.0,
+) -> tuple[bool, str | None]:
+    """
+    Valide les métadonnées EXIF/GPS d'une photo.
+    Retourne (ok, reason_code|None).
 
-    ctx = ctx or RuleContext()
-    reasons: list[str] = []
-
-    timestamp_raw = metadata.get("exif_timestamp")
-    try:
-        timestamp = parse_iso_utc(timestamp_raw) if timestamp_raw else None
-    except Exception:  # pragma: no cover - defensive against malformed input
-        timestamp = None
-
-    if timestamp is None:
-        logger.info("Photo metadata missing or invalid timestamp", extra={"reason": "missing_or_bad_timestamp"})
-        return ValidationResult(Decision.PENDING, ["missing_or_bad_timestamp"])
-
-    now = datetime.now(timezone.utc)
-    age = now - timestamp
-    if age < timedelta(0) or age > ctx.max_photo_age:
-        logger.info(
-            "Photo metadata outside freshness window",
-            extra={"reason": "stale_or_future_timestamp", "age_seconds": age.total_seconds()},
-        )
-        reasons.append("stale_or_future_timestamp")
-
-    lat, lng, radius = milestone.geofence_lat, milestone.geofence_lng, milestone.geofence_radius_m
+    Règles / reason codes :
+      - MISSING_EXIF_TIMESTAMP : pas d'horodatage valide
+      - STALE_TIMESTAMP        : photo trop ancienne (> max_age_minutes)
+      - FUTURE_TIMESTAMP       : datée trop dans le futur (> future_tolerance_minutes)
+      - MISSING_GPS            : GPS absent alors qu'une géofence existe
+      - OUT_OF_GEOFENCE        : hors zone autorisée (rayon + tolérance)
+      - UNTRUSTED_SOURCE       : source non autorisée (autorisé: app, camera)
+    """
+    ts_raw = metadata.get("exif_timestamp")
     gps_lat = metadata.get("gps_lat")
     gps_lng = metadata.get("gps_lng")
-
-    if lat is not None and lng is not None and radius is not None:
-        if gps_lat is None or gps_lng is None:
-            logger.info("Photo metadata missing GPS for geofence", extra={"reason": "missing_gps_for_geofence"})
-            reasons.append("missing_gps_for_geofence")
-        else:
-            distance = haversine_m(float(lat), float(lng), float(gps_lat), float(gps_lng))
-            if distance > float(radius) + ctx.geofence_tolerance_m:
-                logger.info(
-                    "Photo metadata outside geofence",
-                    extra={
-                        "reason": "outside_geofence",
-                        "distance_m": distance,
-                        "radius_m": float(radius),
-                        "tolerance_m": ctx.geofence_tolerance_m,
-                    },
-                )
-                return ValidationResult(Decision.REJECT, ["outside_geofence"])
-
     source = (metadata.get("source") or "").strip().lower()
-    if source and source not in ctx.trusted_sources:
-        logger.info("Photo metadata from untrusted source", extra={"reason": "untrusted_source", "source": source})
-        reasons.append("untrusted_source")
 
-    if any(reason in {"stale_or_future_timestamp", "missing_gps_for_geofence", "untrusted_source"} for reason in reasons):
-        return ValidationResult(Decision.PENDING, reasons)
+    # --- Timestamp EXIF
+    try:
+        ts = parse_iso_utc(ts_raw) if ts_raw else None
+    except Exception:
+        ts = None
 
-    return ValidationResult(Decision.APPROVE, reasons)
+    if not ts:
+        logger.info("Photo missing EXIF timestamp", extra={"reason": "MISSING_EXIF_TIMESTAMP"})
+        return False, "MISSING_EXIF_TIMESTAMP"
+
+    now = datetime.now(UTC)
+    age = now - ts  # >0 si passé, <0 si futur
+
+    if age > timedelta(minutes=max_age_minutes):
+        logger.info(
+            "Photo too old",
+            extra={"reason": "STALE_TIMESTAMP", "age_seconds": age.total_seconds(), "max_age_minutes": max_age_minutes},
+        )
+        return False, "STALE_TIMESTAMP"
+
+    if age < timedelta(0) and (-age) > timedelta(minutes=future_tolerance_minutes):
+        logger.info(
+            "Photo timestamp too far in the future",
+            extra={
+                "reason": "FUTURE_TIMESTAMP",
+                "skew_seconds": (-age).total_seconds(),
+                "tolerance_minutes": future_tolerance_minutes,
+            },
+        )
+        return False, "FUTURE_TIMESTAMP"
+
+    # --- Géofence (si définie sur le milestone)
+    if milestone and milestone.geofence_lat is not None and milestone.geofence_lng is not None and milestone.geofence_radius_m is not None:
+        if gps_lat is None or gps_lng is None:
+            logger.info("Missing GPS for geofence", extra={"reason": "MISSING_GPS"})
+            return False, "MISSING_GPS"
+
+        try:
+            distance = haversine_m(
+                float(milestone.geofence_lat),
+                float(milestone.geofence_lng),
+                float(gps_lat),
+                float(gps_lng),
+            )
+        except Exception:
+            logger.info("GPS parsing error -> treat as missing GPS", extra={"reason": "MISSING_GPS"})
+            return False, "MISSING_GPS"
+
+        allowed = float(milestone.geofence_radius_m) + float(geofence_tolerance_m)
+        if distance > allowed:
+            logger.info(
+                "Outside geofence",
+                extra={
+                    "reason": "OUT_OF_GEOFENCE",
+                    "distance_m": distance,
+                    "radius_m": float(milestone.geofence_radius_m),
+                    "tolerance_m": float(geofence_tolerance_m),
+                },
+            )
+            return False, "OUT_OF_GEOFENCE"
+
+    # --- Source
+    if source and source not in {"app", "camera"}:
+        logger.info("Untrusted source", extra={"reason": "UNTRUSTED_SOURCE", "source": source})
+        return False, "UNTRUSTED_SOURCE"
+
+    return True, None
 
 
-__all__ = [
-    "Decision",
-    "RuleContext",
-    "ValidationResult",
-    "validate_photo_metadata",
-]
+__all__ = ["validate_photo_metadata"]
+

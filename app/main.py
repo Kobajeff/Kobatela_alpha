@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
 from typing import Any
+from .core.database import init_engine, close_engine
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -42,6 +44,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(get_api_router())
+
+# TODO: migrate to FastAPI lifespan context instead of @app.on_event("startup")
+@app.on_event("startup")
+def startup_event() -> None:
+    """Run application startup tasks."""
+
+    models.Base.metadata.create_all(bind=engine)
+    settings = get_settings()
+    logger.info("Application startup", extra={"env": settings.app_env})
 
 
 @app.exception_handler(Exception)

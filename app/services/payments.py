@@ -2,21 +2,36 @@
 import logging
 from decimal import Decimal
 from uuid import uuid4
+from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import EscrowAgreement, Milestone, MilestoneStatus, Payment, PaymentStatus
+from app.models import (
+    AuditLog,
+    EscrowAgreement,
+    EscrowDeposit,
+    EscrowEvent,
+    EscrowStatus,
+    Milestone,
+    MilestoneStatus,
+    Payment,
+    PaymentStatus,
+)
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
+from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+def _to_decimal(x) -> Decimal:
+    if isinstance(x, Decimal):
+        return x
+    return Decimal(str(x))
 
 def _sum_deposits(db: Session, escrow_id: int) -> Decimal:
-    from app.models.escrow import EscrowDeposit
 
     stmt = select(func.coalesce(func.sum(EscrowDeposit.amount), 0)).where(EscrowDeposit.escrow_id == escrow_id)
     value = db.scalar(stmt)
@@ -46,17 +61,37 @@ def available_balance(db: Session, escrow_id: int) -> Decimal:
 
     return _sum_deposits(db, escrow_id) - _sum_payments(db, escrow_id)
 
+def _escrow_available(db: Session, escrow_id: int) -> Decimal:
+    """Dépôts confirmés – paiements déjà envoyés (statuts débitants)."""
+    # dépôts
+    deposited = _sum_deposits(db, escrow_id)
+    # paiements effectivement débités (SENT/SETTLED)
+    stmt = (
+        select(func.coalesce(func.sum(Payment.amount), 0))
+        .where(Payment.escrow_id == escrow_id)
+        .where(Payment.status.in_([PaymentStatus.SENT, PaymentStatus.SETTLED]))
+    )
+    paid_value = db.scalar(stmt)
+    if paid_value is None:
+        paid = Decimal("0")
+    elif isinstance(paid_value, Decimal):
+        paid = paid_value
+    else:
+        paid = Decimal(paid_value)
+    return deposited - paid
+
 
 def execute_payout(
     db: Session,
     *,
     escrow: EscrowAgreement,
-    milestone: Milestone | None,
+    milestone: Optional[Milestone],
     amount: Decimal,
     idempotency_key: str,
 ) -> Payment:
     """Execute (or reuse) a payout in an idempotent fashion."""
-
+    amount = _to_decimal(amount)
+    # 1) Idempotence par clé
     existing = get_existing_by_key(db, Payment, idempotency_key)
     if existing:
         logger.info(
@@ -67,10 +102,16 @@ def execute_payout(
             existing.psp_ref = f"PSP-{uuid4()}"
             db.add(existing)
             db.flush()
+
+        # États terminaux ou déjà envoyés => on renvoie tel quel
         if existing.status in (PaymentStatus.SENT, PaymentStatus.SETTLED):
             return existing
+
+        # Ne jamais "promouvoir" une erreur silencieusement
         if existing.status == PaymentStatus.ERROR:
             raise ValueError("Existing payment is in ERROR. Use a new idempotency key to retry.")
+
+        # PENDING -> on finalise l'envoi (stub PSP) et on met à jour le milestone
         if existing.status == PaymentStatus.PENDING:
             if milestone and milestone.status not in (MilestoneStatus.PAID, MilestoneStatus.PAYING):
                 milestone.status = MilestoneStatus.PAYING
@@ -96,15 +137,21 @@ def execute_payout(
                 "Payout reuse matched existing milestone payment",
                 extra={"payment_id": reuse_candidate.id, "milestone_id": milestone.id},
             )
+            if not reuse_candidate.idempotency_key:
+                reuse_candidate.idempotency_key = idempotency_key
+                db.add(reuse_candidate)
+                db.commit()
             return reuse_candidate
 
+    # 3) Solde séquestre suffisant ?
     if available_balance(db, escrow.id) < amount:
         logger.warning(
             "Insufficient escrow balance for payout",
-            extra={"escrow_id": escrow.id, "amount": amount},
+            extra={"escrow_id": escrow.id, "amount": str(amount)},
         )
         raise ValueError("INSUFFICIENT_ESCROW_BALANCE")
 
+    # 4) Création + “envoi” PSP (stub)
     payment = Payment(
         escrow_id=escrow.id,
         milestone_id=(milestone.id if milestone else None),
@@ -116,8 +163,9 @@ def execute_payout(
         db.add(payment)
         logger.info(
             "Payout initiated",
-            extra={"escrow_id": escrow.id, "amount": amount, "milestone_id": getattr(milestone, "id", None)},
+            extra={"escrow_id": escrow.id, "amount": str(amount), "milestone_id": getattr(milestone, "id", None)},
         )
+
         if milestone:
             if milestone.status not in (MilestoneStatus.APPROVED, MilestoneStatus.PAYING):
                 logger.info(
@@ -140,7 +188,9 @@ def execute_payout(
             extra={"payment_id": payment.id, "escrow_id": escrow.id, "status": payment.status.value},
         )
         return payment
+
     except IntegrityError:
+        # Course condition idempotence: on récupère par clé
         db.rollback()
         existing = get_existing_by_key(db, Payment, idempotency_key)
         if existing:
@@ -181,6 +231,34 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
         payment.idempotency_key = f"payment:{payment.id}"
         db.add(payment)
         db.flush()
+        # après db.flush() sur payment
+        payment.psp_ref = payment.psp_ref or f"PSP-{payment.id}"
+
+        db.add(
+            EscrowEvent(
+                escrow_id=escrow.id,
+                kind="PAYMENT_SENT",
+                data_json={
+                    "payment_id": payment.id,
+                    "amount": payment.amount,
+                    "milestone_id": milestone.id if milestone else None,
+                    "psp_ref": payment.psp_ref,
+                },
+                at=utcnow(),
+            )
+        )
+        db.add(
+            AuditLog(
+                actor="system",
+                action="EXECUTE_PAYOUT",
+                entity="Payment",
+                entity_id=payment.id,
+                data_json={"idempotency_key": payment.idempotency_key, "amount": payment.amount},
+                at=utcnow(),
+            )
+        )
+        _finalize_escrow_if_paid(db, escrow.id)  # ← ajoute la fonction ci-dessous si pas encore là
+
 
     try:
         executed = execute_payout(
@@ -199,5 +277,27 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
     db.refresh(payment)
     return executed
 
+def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
+    total = int(db.scalar(
+        select(func.count()).select_from(Milestone).where(Milestone.escrow_id == escrow_id)
+    ) or 0)
+    if total == 0:
+        return  # ne ferme pas les escrows sans jalons
+
+    remaining = int(db.scalar(
+        select(func.count()).select_from(Milestone).where(
+            Milestone.escrow_id == escrow_id,
+            Milestone.status != MilestoneStatus.PAID,
+        )
+    ) or 0)
+
+    if remaining == 0:
+        escrow = db.get(EscrowAgreement, escrow_id)
+        if escrow and escrow.status != EscrowStatus.RELEASED:
+            escrow.status = EscrowStatus.RELEASED
+            db.add(EscrowEvent(
+                escrow_id=escrow_id, kind="CLOSED",
+                data_json={"reason": "all_milestones_paid"}, at=utcnow(),
+            ))
 
 __all__ = ["available_balance", "execute_payment", "execute_payout"]
