@@ -15,14 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 # --- Imports robustes (nouveau chemin puis fallback ancien)
-try:
-    from app.core.config import get_settings        # nouveau
-except ModuleNotFoundError:
     from app.config import get_settings             # fallback
-
-try:
-    from app.core.database import Base              # nouveau
-except ModuleNotFoundError:
     from app.models.base import Base                # fallback
 
 
