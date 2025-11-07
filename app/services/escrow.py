@@ -1,6 +1,6 @@
 """Escrow service logic."""
 import logging
-from decimal import Decimal
+from decimal import Decimal , InvalidOperation
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
@@ -15,6 +15,22 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+def _to_decimal(value: Any) -> Decimal:
+    """
+    Convertit proprement un montant en Decimal(2 décimales).
+    Accepte Decimal, int, float, str. Lève ValueError si invalide.
+    """
+    if isinstance(value, Decimal):
+        d = value
+    else:
+        try:
+            # str() évite les artefacts binaires des floats
+            d = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError) as e:
+            raise ValueError(f"Invalid money amount: {value!r}") from e
+
+    # Normalise à 2 décimales (montants en devise)
+    return d.quantize(Decimal("0.01"))
 
 def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     """Create a new escrow agreement."""
