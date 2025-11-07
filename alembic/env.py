@@ -7,14 +7,19 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]  # .../kobatela_alpha
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 # ✅ nouveaux chemins après refactor core/
 from app.core.config import get_settings
 from app.core.database import Base
+
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
+    
 
 
 def get_url() -> str:
