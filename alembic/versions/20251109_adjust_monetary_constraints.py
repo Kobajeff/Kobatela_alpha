@@ -21,6 +21,8 @@ def _has_column(table_name: str, column_name: str) -> bool:
 
 
 def upgrade() -> None:
+    if "milestones" not in insp.get_table_names():
+        return
     with op.batch_alter_table("transactions", schema=None) as batch:
         batch.alter_column("amount", existing_type=sa.Float(asdecimal=False), type_=NUMERIC_TYPE)
 
