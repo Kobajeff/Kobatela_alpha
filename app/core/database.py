@@ -1,20 +1,39 @@
 """Database lifecycle helpers."""
+# app/core/database.py
 from __future__ import annotations
 
-from sqlalchemy.engine import Engine
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+from typing import Optional
 
-from app import models
-from app.db import engine
+from app.config import get_settings
+
+# --- Exports attendus par le reste du code ---
+Base = declarative_base()
+engine = None  # sera initialisé par init_engine()
+SessionLocal: Optional[sessionmaker] = None
+
+
+def _get_database_url() -> str:
+    settings = get_settings()
+    # tolère DATABASE_URL ou database_url, fallback SQLite fichier local
+    return getattr(settings, "DATABASE_URL", getattr(settings, "database_url", "sqlite:///./kobatela.db"))
 
 
 async def init_engine() -> None:
-    """Initialize database connections and ensure schema is ready."""
-
-    models.Base.metadata.create_all(bind=engine)
+    """Initialise le moteur et la Session factory (sync engine pour tests & alembic)."""
+    global engine, SessionLocal
+    if engine is None:
+        engine = create_engine(_get_database_url(), future=True)
+        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 async def close_engine() -> None:
-    """Dispose of active database connections."""
-
-    if isinstance(engine, Engine):
+    """Ferme proprement le moteur."""
+    global engine
+    if engine is not None:
         engine.dispose()
+        engine = None
+
+
+__all__ = ["Base", "engine", "SessionLocal", "init_engine", "close_engine"]
