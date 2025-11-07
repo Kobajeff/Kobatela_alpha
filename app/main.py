@@ -48,7 +48,7 @@ app.include_router(get_api_router())
 # ⚠️ Gardé pour compat tester: app.router.startup() déclenche @on_event
 @app.on_event("startup")
 def startup_event() -> None:
-    # pas d’init_engine ici (déjà fait dans lifespan)
+    init_engine()# pas d’init_engine ici (déjà fait dans lifespan)
     Base.metadata.create_all(bind=engine)
     logger.info("Tables ensured on startup", extra={"env": settings.app_env})
 
