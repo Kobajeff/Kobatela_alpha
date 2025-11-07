@@ -7,8 +7,9 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-from app.config import get_settings
-from app.models import Base
+# ✅ nouveaux chemins après refactor core/
+from app.core.config import get_settings
+from app.core.database import Base
 
 config = context.config
 
@@ -17,10 +18,13 @@ if config.config_file_name is not None:
 
 
 def get_url() -> str:
+    # 1) priorité à la variable d'env
     database_url = os.getenv("DATABASE_URL")
     if database_url:
         return database_url
-    return get_settings().database_url
+    # 2) fallback aux settings (tolérant UPPER/lower)
+    settings = get_settings()
+    return getattr(settings, "DATABASE_URL", getattr(settings, "database_url"))
 
 
 target_metadata = Base.metadata
@@ -34,7 +38,6 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
-
     with context.begin_transaction():
         context.run_migrations()
 
@@ -54,12 +57,15 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
         )
-
         with context.begin_transaction():
             context.run_migrations()
 
 
+# ✅ Ne pas oublier la branche online
 if context.is_offline_mode():
     run_migrations_offline()
+else:
+    run_migrations_online()
+
 else:
     run_migrations_online()
