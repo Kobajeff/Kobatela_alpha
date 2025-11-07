@@ -123,3 +123,57 @@ def upgrade() -> None:
         op.create_index(
             "ix_psp_webhook_events_kind", "psp_webhook_events", ["kind"], unique=False, if_not_exists=True
         )
+
+def downgrade() -> None:
+    op.drop_index("ix_escrow_events_idempotency_key", table_name="escrow_events")
+    op.drop_index("ix_psp_webhook_events_kind", table_name="psp_webhook_events")
+    op.drop_index("ix_psp_webhook_events_received", table_name="psp_webhook_events")
+
+    with op.batch_alter_table("proofs", schema=None) as batch:
+        batch.drop_constraint("uq_proofs_sha256", type_="unique")
+
+    if _has_column("escrow_events", "idempotency_key"):
+        with op.batch_alter_table("escrow_events", schema=None) as batch:
+            batch.drop_column("idempotency_key")
+
+    op.drop_index("ix_payments_escrow_status", table_name="payments")
+    op.drop_index("ix_payments_status", table_name="payments")
+    op.drop_index("ix_payments_created_at", table_name="payments")
+
+    with op.batch_alter_table("payments", schema=None) as batch:
+        batch.drop_constraint("uq_payments_psp_ref", type_="unique")
+        batch.drop_constraint("ck_payment_positive_amount", type_="check")
+        batch.alter_column("amount", type_=sa.Float(asdecimal=False))
+
+    with op.batch_alter_table("purchases", schema=None) as batch:
+        batch.alter_column("amount", type_=sa.Float(asdecimal=False))
+
+    with op.batch_alter_table("allowed_payees", schema=None) as batch:
+        batch.drop_constraint("ck_allowed_payee_spent_total_non_negative", type_="check")
+        batch.drop_constraint("ck_allowed_payee_spent_today_non_negative", type_="check")
+        batch.drop_constraint("ck_allowed_payee_total_limit", type_="check")
+        batch.drop_constraint("ck_allowed_payee_daily_limit", type_="check")
+        batch.alter_column("spent_total", type_=sa.Float(asdecimal=False))
+        batch.alter_column("spent_today", type_=sa.Float(asdecimal=False))
+        batch.alter_column("total_limit", type_=sa.Float(asdecimal=False))
+        batch.alter_column("daily_limit", type_=sa.Float(asdecimal=False))
+
+    with op.batch_alter_table("milestones", schema=None) as batch:
+        batch.drop_constraint("ck_milestone_geofence_radius_non_negative", type_="check")
+        batch.drop_constraint("ck_milestone_positive_idx", type_="check")
+        batch.drop_constraint("ck_milestone_positive_amount", type_="check")
+        batch.alter_column("amount", type_=sa.Float(asdecimal=False))
+
+    with op.batch_alter_table("escrow_deposits", schema=None) as batch:
+        batch.drop_constraint("ck_escrow_deposit_positive_amount", type_="check")
+        batch.alter_column("amount", type_=sa.Float(asdecimal=False))
+
+    op.drop_index("ix_escrow_deadline", table_name="escrow_agreements")
+    op.drop_index("ix_escrow_status", table_name="escrow_agreements")
+
+    with op.batch_alter_table("escrow_agreements", schema=None) as batch:
+        batch.drop_constraint("ck_escrow_amount_total_non_negative", type_="check")
+        batch.alter_column("amount_total", type_=sa.Float(asdecimal=False))
+
+    with op.batch_alter_table("transactions", schema=None) as batch:
+        batch.alter_column("amount", type_=sa.Float(asdecimal=False))
