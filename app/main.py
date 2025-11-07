@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 # ✅ nouveaux chemins après refactor
-from app.core.config import AppInfo, get_settings
+from app.config import AppInfo, get_settings
 from app.core.database import Base, engine, init_engine, close_engine
 from app.core.logging import get_logger, setup_logging
 import app.models  # important : enregistre les tables sur Base.metadata
