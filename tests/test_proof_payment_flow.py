@@ -1,5 +1,6 @@
 """End-to-end test for proof approval and payment execution."""
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -43,7 +44,7 @@ async def test_proof_approval_triggers_payment(client, auth_headers, db_session)
         escrow_id=escrow_id,
         idx=1,
         label="Prototype delivery",
-        amount=500.0,
+        amount=Decimal("500.00"),
         proof_type="PHOTO",
         validator="SENDER",
     )

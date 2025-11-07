@@ -98,7 +98,6 @@ def execute_payout(
             "Reusing existing payment",
             extra={"payment_id": existing.id, "idem": idempotency_key},
         )
-        # Toujours disposer d'une référence PSP
         if existing.psp_ref is None:
             existing.psp_ref = f"PSP-{uuid4()}"
             db.add(existing)
@@ -124,11 +123,8 @@ def execute_payout(
             if milestone:
                 db.refresh(milestone)
             return existing
-
-        # Autres états inattendus
         raise ValueError(f"Existing payment not in reusable state: {existing.status}")
 
-    # 2) Fallback idempotence: même milestone + même montant déjà SENT/SETTLED
     if milestone is not None:
         reuse_stmt = (
             select(Payment)
@@ -178,7 +174,6 @@ def execute_payout(
                 )
             milestone.status = MilestoneStatus.PAYING
 
-        # Stub PSP: on génère une référence et on marque comme envoyé
         payment.psp_ref = payment.psp_ref or f"PSP-{uuid4()}"
         payment.status = PaymentStatus.SENT
         if milestone:
@@ -205,9 +200,6 @@ def execute_payout(
             )
             return existing
         raise
-
-
-    
 
 
 def execute_payment(db: Session, payment_id: int) -> Payment:

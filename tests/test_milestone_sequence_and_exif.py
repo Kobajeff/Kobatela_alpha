@@ -1,5 +1,6 @@
 """Tests for milestone sequencing and photo metadata validation."""
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -44,7 +45,7 @@ async def test_sequence_error_blocks_future_milestones(client, auth_headers, db_
         escrow_id=escrow_id,
         idx=1,
         label="First milestone",
-        amount=100.0,
+        amount=Decimal("100.00"),
         proof_type="PHOTO",
         validator="SENDER",
     )
@@ -52,7 +53,7 @@ async def test_sequence_error_blocks_future_milestones(client, auth_headers, db_
         escrow_id=escrow_id,
         idx=2,
         label="Second milestone",
-        amount=200.0,
+        amount=Decimal("200.00"),
         proof_type="PHOTO",
         validator="SENDER",
     )
@@ -89,7 +90,7 @@ async def test_photo_outside_geofence_rejected(client, auth_headers, db_session)
         escrow_id=escrow_id,
         idx=1,
         label="Geofenced milestone",
-        amount=150.0,
+        amount=Decimal("150.00"),
         proof_type="PHOTO",
         validator="SENDER",
         geofence_lat=5.3210,
@@ -129,7 +130,7 @@ async def test_photo_with_untrusted_source_requires_review(client, auth_headers,
         escrow_id=escrow_id,
         idx=1,
         label="Photo milestone",
-        amount=180.0,
+        amount=Decimal("180.00"),
         proof_type="PHOTO",
         validator="SENDER",
         geofence_lat=5.0,

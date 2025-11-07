@@ -15,13 +15,6 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
-def _to_decimal(x) -> Decimal:
-    if isinstance(x, Decimal):
-        return x
-    # avoid float binary artefacts
-    return Decimal(str(x))
-
-# app/services/escrow.py
 
 def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     """Create a new escrow agreement."""
@@ -40,7 +33,6 @@ def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     db.refresh(agreement)
     logger.info("Escrow created", extra={"escrow_id": agreement.id})
     return agreement
-
 
 
 def _total_deposited(db: Session, escrow_id: int) -> Decimal:
@@ -107,7 +99,6 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
                 db.refresh(agreement)
                 return agreement
         raise
-
 
 
 def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) -> EscrowAgreement:

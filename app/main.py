@@ -1,23 +1,41 @@
 """FastAPI application entry point."""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
 import logging
 from typing import Any
+from .core.database import init_engine, close_engine
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app import models
 from app.config import AppInfo, get_settings
-from app.db import engine
-from app.logging_conf import configure_logging
+from app.core.database import close_engine, init_engine
+from app.core.logging import get_logger, setup_logging
 from app.routers import get_api_router
 from app.utils.errors import error_response
 
-configure_logging()
-logger = logging.getLogger(__name__)
+settings = get_settings()
+logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown tasks."""
+
+    setup_logging()
+    logger.info("Application startup", extra={"env": settings.app_env})
+    await init_engine()
+    try:
+        yield
+    finally:
+        await close_engine()
+        logger.info("Application shutdown", extra={"env": settings.app_env})
+
 
 app_info = AppInfo()
-app = FastAPI(title=app_info.name, version=app_info.version)
+app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -18,6 +18,7 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
+EPS = Decimal("1e-9")
 
 def add_allowed_payee(
     db: Session,
@@ -150,7 +151,7 @@ def spend_to_allowed_payee(
             detail=error_response("DAILY_LIMIT_REACHED", "Daily limit would be exceeded."),
         )
 
-    if payee.total_limit is not None and (payee.spent_total + amount) > payee.total_limit + 1e-9:
+    if payee.total_limit is not None and (payee.spent_total + amount) > payee.total_limit + EPS:
         logger.info(
             "Total limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
@@ -161,7 +162,7 @@ def spend_to_allowed_payee(
         )
 
     balance = available_balance(db, escrow_id=escrow.id)
-    if amount > balance + 1e-9:
+    if amount > balance + EPS:
         logger.warning(
             "Insufficient escrow balance for usage spend",
             extra={"escrow_id": escrow_id, "amount": amount, "balance": balance},

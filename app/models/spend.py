@@ -1,6 +1,7 @@
 """Spend-related ORM models."""
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import Boolean, CheckConstraint, Enum as SqlEnum, ForeignKey, Index, Numeric, String, UniqueConstraint
