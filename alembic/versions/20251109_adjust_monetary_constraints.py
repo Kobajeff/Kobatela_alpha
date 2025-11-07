@@ -5,17 +5,17 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy import inspect, text
 
-
 revision = "20251109_adjust_monetary_constraints"
 down_revision = "20251108_add_last_reset_allowed_payees"
 branch_labels = None
 depends_on = None
 
-
 NUMERIC_TYPE = sa.Numeric(18, 2)
 
+
 def _drop_batch_tmp(table: str) -> None:
-    op.execute(text(f'DROP TABLE IF EXISTS _alembic_tmp_{table}'))
+    # Nettoie les tables temporaires laissées par un batch interrompu (SQLite)
+    op.execute(text(f"DROP TABLE IF EXISTS _alembic_tmp_{table}"))
 
 
 def _has_column(table_name: str, column_name: str) -> bool:
@@ -25,7 +25,6 @@ def _has_column(table_name: str, column_name: str) -> bool:
 
 
 def upgrade() -> None:
-    # Init inspecteur
     bind = op.get_bind()
     insp = inspect(bind)
     tables = set(insp.get_table_names())
@@ -38,7 +37,7 @@ def upgrade() -> None:
 
     # escrow_agreements
     if "escrow_agreements" in tables:
-          _drop_batch_tmp("escrow_agreements")
+        _drop_batch_tmp("escrow_agreements")  # <-- corrige l’indentation ici
         with op.batch_alter_table("escrow_agreements", schema=None) as batch:
             batch.alter_column("amount_total", existing_type=sa.Float(asdecimal=False), type_=NUMERIC_TYPE)
             batch.create_check_constraint("ck_escrow_amount_total_non_negative", "amount_total >= 0")
@@ -106,6 +105,7 @@ def upgrade() -> None:
 
     # escrow_events
     if "escrow_events" in tables:
+        # drop tmp même si on ajoute seulement une colonne (prudent pour SQLite)
         _drop_batch_tmp("escrow_events")
         if not _has_column("escrow_events", "idempotency_key"):
             with op.batch_alter_table("escrow_events", schema=None) as batch:
