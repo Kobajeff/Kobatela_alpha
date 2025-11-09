@@ -23,6 +23,14 @@ def _has_column(table_name: str, column_name: str) -> bool:
     inspector = sa.inspect(bind)
     return column_name in {col["name"] for col in inspector.get_columns(table_name)}
 
+def _index_exists(table_name: str, index_name: str) -> bool:
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    try:
+        return index_name in {idx["name"] for idx in insp.get_indexes(table_name)}
+    except Exception:
+        return False
+
 
 def upgrade() -> None:
     bind = op.get_bind()
@@ -166,9 +174,22 @@ def downgrade() -> None:
     # Couper les FK pendant le rollback aussi (SQLite)
     op.execute(text("PRAGMA foreign_keys=OFF"))
     try:
-        op.drop_index("ix_escrow_events_idempotency_key", table_name="escrow_events")
-        op.drop_index("ix_psp_webhook_events_kind", table_name="psp_webhook_events")
-        op.drop_index("ix_psp_webhook_events_received", table_name="psp_webhook_events")
+       if _index_exists("escrow_events", "ix_escrow_events_idempotency_key"):
+            op.drop_index("ix_escrow_events_idempotency_key", table_name="escrow_events")
+
+        # psp_webhook_events
+        if _index_exists("psp_webhook_events", "ix_psp_webhook_events_kind"):
+            op.drop_index("ix_psp_webhook_events_kind", table_name="psp_webhook_events")
+        if _index_exists("psp_webhook_events", "ix_psp_webhook_events_received"):
+            op.drop_index("ix_psp_webhook_events_received", table_name="psp_webhook_events")
+
+        # payments (indices composés créés en upgrade)
+        if _index_exists("payments", "ix_payments_escrow_status"):
+            op.drop_index("ix_payments_escrow_status", table_name="payments")
+        if _index_exists("payments", "ix_payments_status"):
+            op.drop_index("ix_payments_status", table_name="payments")
+        if _index_exists("payments", "ix_payments_created_at"):
+            op.drop_index("ix_payments_created_at", table_name="payments")
 
         with op.batch_alter_table(
             "proofs", schema=None, reflect_kwargs={"resolve_fks": False}
