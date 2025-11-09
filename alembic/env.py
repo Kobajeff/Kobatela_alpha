@@ -47,24 +47,28 @@ def get_url() -> str:
 target_metadata = Base.metadata
 
 
+# --- Cible de métadonnées
+target_metadata = Base.metadata
+
 def _configure_common_kwargs() -> dict:
-    """Options communes à offline/online."""
+    """Options communes à offline/online (sans literal_binds)."""
     return dict(
         target_metadata=target_metadata,
-        render_as_batch=True,          # <-- crucial pour SQLite
-        compare_type=True,             # détecter les changements de type
-        compare_server_default=True,   # détecter les defaults
-        literal_binds=True,            # + stable en offline
+        render_as_batch=True,        # crucial pour SQLite (ALTER TABLE)
+        compare_type=True,           # détecter changements de type
+        compare_server_default=True, # détecter defaults côté serveur
         dialect_opts={"paramstyle": "named"},
     )
 
-
 def run_migrations_offline() -> None:
     url = get_url()
-    context.configure(url=url, **_configure_common_kwargs())
+    context.configure(
+        url=url,
+        **_configure_common_kwargs(),
+        literal_binds=True,          # <= UNIQUEMENT offline
+    )
     with context.begin_transaction():
         context.run_migrations()
-
 
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {}) or {}
@@ -77,10 +81,12 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, **_configure_common_kwargs())
+        context.configure(
+            connection=connection,
+            **_configure_common_kwargs(),   # <= PAS de literal_binds ici
+        )
         with context.begin_transaction():
             context.run_migrations()
-
 
 if context.is_offline_mode():
     run_migrations_offline()
