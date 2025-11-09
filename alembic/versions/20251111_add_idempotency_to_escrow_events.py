@@ -1,8 +1,5 @@
 """Add idempotency_key to escrow_events table (idempotent)"""
 
-"""Add idempotency_key to escrow_events table (idempotent)"""
-from __future__ import annotations
-
 from alembic import op
 import sqlalchemy as sa
 
