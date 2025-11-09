@@ -28,6 +28,7 @@ def upgrade() -> None:
     bind = op.get_bind()
     insp = inspect(bind)
     tables = set(insp.get_table_names())
+    op.execute(text("PRAGMA foreign_keys=OFF"))
 
     # transactions
     if "transactions" in tables:
@@ -123,11 +124,15 @@ def upgrade() -> None:
         op.create_index(
             "ix_psp_webhook_events_kind", "psp_webhook_events", ["kind"], unique=False, if_not_exists=True
         )
-
+  finally:
+        # --- Réactiver la vérif FK
+        op.execute(text("PRAGMA foreign_keys=ON"))
+    
 def downgrade() -> None:
     op.drop_index("ix_escrow_events_idempotency_key", table_name="escrow_events")
     op.drop_index("ix_psp_webhook_events_kind", table_name="psp_webhook_events")
     op.drop_index("ix_psp_webhook_events_received", table_name="psp_webhook_events")
+    op.execute(text("PRAGMA foreign_keys=OFF"))
 
     with op.batch_alter_table("proofs", schema=None, reflect_kwargs={"resolve_fks": False}) as batch:
         batch.drop_constraint("uq_proofs_sha256", type_="unique")
@@ -177,3 +182,6 @@ def downgrade() -> None:
 
     with op.batch_alter_table("transactions", schema=None, reflect_kwargs={"resolve_fks": False}) as batch:
         batch.alter_column("amount", type_=sa.Float(asdecimal=False))
+  finally:
+        # --- Réactiver la vérif FK
+        op.execute(text("PRAGMA foreign_keys=ON"))
