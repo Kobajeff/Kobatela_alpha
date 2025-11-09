@@ -174,7 +174,8 @@ def downgrade() -> None:
     # Couper les FK pendant le rollback aussi (SQLite)
     op.execute(text("PRAGMA foreign_keys=OFF"))
     try:
-       if _index_exists("escrow_events", "ix_escrow_events_idempotency_key"):
+        # escrow_events
+        if _index_exists("escrow_events", "ix_escrow_events_idempotency_key"):
             op.drop_index("ix_escrow_events_idempotency_key", table_name="escrow_events")
 
         # psp_webhook_events
@@ -201,10 +202,6 @@ def downgrade() -> None:
                 "escrow_events", schema=None, reflect_kwargs={"resolve_fks": False}
             ) as batch:
                 batch.drop_column("idempotency_key")
-
-        op.drop_index("ix_payments_escrow_status", table_name="payments")
-        op.drop_index("ix_payments_status", table_name="payments")
-        op.drop_index("ix_payments_created_at", table_name="payments")
 
         with op.batch_alter_table(
             "payments", schema=None, reflect_kwargs={"resolve_fks": False}
@@ -244,8 +241,10 @@ def downgrade() -> None:
             batch.drop_constraint("ck_escrow_deposit_positive_amount", type_="check")
             batch.alter_column("amount", type_=sa.Float(asdecimal=False))
 
-        op.drop_index("ix_escrow_deadline", table_name="escrow_agreements")
-        op.drop_index("ix_escrow_status", table_name="escrow_agreements")
+        if _index_exists("escrow_agreements", "ix_escrow_deadline"):
+            op.drop_index("ix_escrow_deadline", table_name="escrow_agreements")
+        if _index_exists("escrow_agreements", "ix_escrow_status"):
+            op.drop_index("ix_escrow_status", table_name="escrow_agreements")
 
         with op.batch_alter_table(
             "escrow_agreements", schema=None, reflect_kwargs={"resolve_fks": False}
@@ -257,7 +256,6 @@ def downgrade() -> None:
             "transactions", schema=None, reflect_kwargs={"resolve_fks": False}
         ) as batch:
             batch.alter_column("amount", type_=sa.Float(asdecimal=False))
-
     finally:
         op.execute(text("PRAGMA foreign_keys=ON"))
 
