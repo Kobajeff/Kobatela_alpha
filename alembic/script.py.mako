@@ -1,17 +1,21 @@
-"""${message}"""
+"""${message}
 
-revision = ${repr(revision)}
-down_revision = ${repr(down_revision)}
-branch_labels = ${repr(branch_labels)}
-depends_on = ${repr(depends_on)}
+Revision ID: ${up_revision}
+Revises: ${down_revision or None}
+Create Date: ${create_date}
+"""
 
 from alembic import op
 import sqlalchemy as sa
 
+# revision identifiers, used by Alembic.
+revision = ${repr(up_revision)}
+down_revision = ${repr(down_revision)}
+branch_labels = ${repr(branch_labels)}
+depends_on = ${repr(depends_on)}
 
-def upgrade() -> None:
-    pass
+def upgrade():
+    ${upgrades if upgrades else "pass"}
 
-
-def downgrade() -> None:
-    pass
+def downgrade():
+    ${downgrades if downgrades else "pass"}
