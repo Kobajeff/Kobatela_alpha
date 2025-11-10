@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from app.config import AppInfo, get_settings
 from app import db                               # moteur/metadata centralisés
 from app.core.logging import get_logger, setup_logging
-import app.models                                # enregistre les tables
+import app.models  # enregistre les tables
 from app.routers import get_api_router
 from app.utils.errors import error_response
 
@@ -22,7 +22,9 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("Application startup", extra={"env": settings.app_env})
-    db.init_engine()                              # sync, idempotent
+    if settings.psp_webhook_secret is None:
+        raise RuntimeError("PSP_WEBHOOK_SECRET manquant : configurez la variable d'environnement ou le fichier .env")
+    db.init_engine()  # sync, idempotent
     # IMPORTANT : créer les tables ici quand on utilise lifespan
     db.create_all()
     try:
