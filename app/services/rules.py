@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, UTC
-from typing import Optional, Tuple, Dict, Any
+from typing import Any, Optional, Tuple
 
 from app.models.milestone import Milestone
 from app.utils.geo import haversine_m
@@ -20,7 +20,7 @@ def validate_photo_metadata(
     max_age_minutes: int = 10,
     future_tolerance_minutes: int = 2,
     geofence_tolerance_m: float = 15.0,
-) ->  tuple [bool, Optional[str]]:
+) -> tuple[bool, Optional[str]]:
     """
     Valide les métadonnées EXIF/GPS d'une photo.
     Retourne (ok, reason_code|None).

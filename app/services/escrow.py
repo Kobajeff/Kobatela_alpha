@@ -1,7 +1,8 @@
-"""Escrow service logic."""
+"""Escrow domain services."""
 import logging
-from decimal import Decimal , InvalidOperation , ROUND_HALF_UP
-from typing import Any 
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError

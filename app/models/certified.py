@@ -11,8 +11,8 @@ from .base import Base
 class CertificationLevel(str, PyEnum):
     """Certification levels available for accounts."""
 
-    BASIC = "basic"
-    GOLD = "gold"
+    BASIC = "BASIC"
+    GOLD = "GOLD"
 
 
 class CertifiedAccount(Base):

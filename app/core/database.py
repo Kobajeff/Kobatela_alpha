@@ -1,39 +1,33 @@
-"""Database lifecycle helpers."""
-# app/core/database.py
+"""Compatibility layer re-exporting shared database helpers."""
 from __future__ import annotations
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
-from typing import Optional
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
-from app.config import get_settings
+from app import db
 
-Base = declarative_base()
-engine = None  # sera initialisé par init_engine()
-SessionLocal: Optional[sessionmaker] = None
-
-
-def _get_database_url() -> str:
-    settings = get_settings()
-    return getattr(settings, "DATABASE_URL",
-           getattr(settings, "database_url", "sqlite:///./kobatela.db"))
+# Re-exported symbols to keep historic import paths working.
+Base = db.Base
+engine: Engine | None = None
+SessionLocal: sessionmaker[Session] | None = None
 
 
-def init_engine() -> None:
-    """Initialise le moteur et la Session factory (sync engine pour tests & alembic)."""
+def init_engine() -> Engine:
+    """Initialise the database engine and keep local aliases in sync."""
+
     global engine, SessionLocal
-    if engine is None:
-        engine = create_engine(_get_database_url(), future=True)
-        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    engine = db.init_engine()
+    SessionLocal = db.SessionLocal
+    return engine
 
 
 def close_engine() -> None:
-    """Ferme proprement le moteur."""
-    global engine
-    if engine is not None:
-        engine.dispose()
-        engine = None
+    """Dispose of the shared database engine and reset aliases."""
+
+    global engine, SessionLocal
+    db.close_engine()
+    engine = None
+    SessionLocal = None
 
 
 __all__ = ["Base", "engine", "SessionLocal", "init_engine", "close_engine"]
-
