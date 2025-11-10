@@ -4,27 +4,43 @@ from __future__ import annotations
 import hashlib
 import logging
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_db
 from app.services import psp_webhooks
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/psp", tags=["psp"])
+settings = get_settings()
 
 
-@router.post("/webhook", status_code=200)
+@router.post("/webhook", status_code=status.HTTP_200_OK)
 async def psp_webhook(
     request: Request,
     db: Session = Depends(get_db),
     x_psp_signature: str | None = Header(default=None),
+    x_psp_timestamp: str | None = Header(default=None),
     x_psp_event_id: str | None = Header(default=None),
     x_psp_ref: str | None = Header(default=None),
 ) -> dict[str, str]:
+    secret = settings.psp_webhook_secret
+    if secret is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PSP webhook secret not configured",
+        )
+
     body = await request.body()
-    psp_webhooks.verify_signature(body, x_psp_signature or "")
+    ok, reason = psp_webhooks.verify_signature(secret, body, x_psp_signature, x_psp_timestamp)
+    if not ok:
+        logger.warning(
+            "Invalid PSP webhook signature",
+            extra={"reason": reason, "event_id": x_psp_event_id, "psp_ref": x_psp_ref},
+        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid signature: {reason}")
 
     payload = await request.json()
     event_id = x_psp_event_id or payload.get("id") or payload.get("event_id")

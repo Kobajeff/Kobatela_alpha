@@ -4,10 +4,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import os
+import time
 from typing import Any
 
-from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.payment import Payment, PaymentStatus
@@ -17,22 +16,39 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
-_SECRET = os.environ.get("PSP_WEBHOOK_SECRET", "")
 
+def verify_signature(
+    secret: str,
+    body_bytes: bytes,
+    signature: str | None,
+    timestamp: str | None,
+    *,
+    skew_seconds: int = 300,
+) -> tuple[bool, str]:
+    """Validate webhook signatures with HMAC and timestamp skew protection."""
 
-def verify_signature(body_bytes: bytes, signature: str) -> None:
-    """Public wrapper to validate webhook signatures."""
+    if not secret:
+        return False, "secret-missing"
+    if not signature:
+        return False, "signature-missing"
+    if not timestamp:
+        return False, "timestamp-missing"
 
-    _verify_signature(body_bytes, signature)
+    try:
+        sent_ts = float(timestamp)
+    except (TypeError, ValueError):
+        return False, "timestamp-invalid"
 
+    now = time.time()
+    if abs(now - sent_ts) > skew_seconds:
+        return False, "timestamp-skew"
 
-def _verify_signature(body_bytes: bytes, signature: str) -> None:
-    """Validate webhook signatures using the shared secret."""
+    payload = timestamp.encode() + b"." + body_bytes
+    digest = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(digest, signature):
+        return False, "hmac-mismatch"
 
-    mac = hmac.new(_SECRET.encode(), body_bytes, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(mac, signature or ""):
-        logger.warning("Invalid PSP webhook signature")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid signature")
+    return True, ""
 
 
 def handle_event(

@@ -6,9 +6,11 @@ import hmac
 import json
 import os
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 
+from app.config import get_settings
 from app.models import (
     EscrowAgreement,
     EscrowStatus,
@@ -36,7 +38,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
     escrow = EscrowAgreement(
         client_id=client_user.id,
         provider_id=provider_user.id,
-        amount_total=100.0,
+        amount_total=Decimal("100.00"),
         currency="USD",
         status=EscrowStatus.FUNDED,
         release_conditions_json={},
@@ -48,7 +50,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
     payment = Payment(
         escrow_id=escrow.id,
         milestone_id=None,
-        amount=50.0,
+        amount=Decimal("50.00"),
         status=PaymentStatus.SENT,
         psp_ref="psp-123",
         idempotency_key="pay-psp-123",
@@ -58,7 +60,9 @@ async def test_psp_webhook_settles_payment(client, db_session):
 
     payload = {"type": "payment.settled", "psp_ref": "psp-123"}
     body = json.dumps(payload).encode()
-    signature = hmac.new(os.environ["PSP_WEBHOOK_SECRET"].encode(), body, hashlib.sha256).hexdigest()
+    timestamp = str(utcnow().timestamp())
+    payload_to_sign = timestamp.encode() + b"." + body
+    signature = hmac.new(os.environ["PSP_WEBHOOK_SECRET"].encode(), payload_to_sign, hashlib.sha256).hexdigest()
 
     response = await client.post(
         "/psp/webhook",
@@ -66,6 +70,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
         headers={
             "Content-Type": "application/json",
             "X-PSP-Signature": signature,
+            "X-PSP-Timestamp": timestamp,
             "X-PSP-Event-Id": "evt-psp-1",
             "X-PSP-Ref": "psp-123",
         },
@@ -81,6 +86,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
         headers={
             "Content-Type": "application/json",
             "X-PSP-Signature": signature,
+            "X-PSP-Timestamp": timestamp,
             "X-PSP-Event-Id": "evt-psp-1",
             "X-PSP-Ref": "psp-123",
         },
@@ -95,6 +101,7 @@ async def test_psp_webhook_invalid_signature(client):
 
     payload = {"type": "payment.settled"}
     body = json.dumps(payload).encode()
+    timestamp = str(utcnow().timestamp())
 
     response = await client.post(
         "/psp/webhook",
@@ -102,7 +109,26 @@ async def test_psp_webhook_invalid_signature(client):
         headers={
             "Content-Type": "application/json",
             "X-PSP-Signature": "bad-signature",
+            "X-PSP-Timestamp": timestamp,
             "X-PSP-Event-Id": "evt-psp-2",
         },
     )
     assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_psp_webhook_missing_secret(client):
+    """The PSP webhook should fail-fast if the secret is not configured."""
+
+    settings = get_settings()
+    original_secret = settings.psp_webhook_secret
+    try:
+        settings.psp_webhook_secret = None
+        response = await client.post(
+            "/psp/webhook",
+            content=b"{}",
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 503
+    finally:
+        settings.psp_webhook_secret = original_secret

@@ -1,3 +1,4 @@
+"""Spending and usage endpoints."""
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Header, status
@@ -5,8 +6,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.security import require_api_key
-
 from app.schemas.spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -16,6 +15,7 @@ from app.schemas.spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
+from app.security import require_api_key
 from app.services import spend as spend_service
 from app.services import usage as usage_service
 
