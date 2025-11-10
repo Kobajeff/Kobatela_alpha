@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import AppInfo, get_settings
-from app import db  # moteur/metadata centralisés
+from app import db                               # moteur/metadata centralisés
 from app.core.logging import get_logger, setup_logging
 import app.models  # enregistre les tables
 from app.routers import get_api_router
@@ -35,7 +35,25 @@ async def lifespan(app: FastAPI):
 
 app_info = AppInfo()
 
-app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
+# Permet le basculement sans casser la prod/tests
+USE_LIFESPAN = getattr(settings, "use_lifespan", True)
+
+if USE_LIFESPAN:
+    app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
+else:
+    app = FastAPI(title=app_info.name, version=app_info.version)
+
+    # -------- Ancien mécanisme on_event (seulement si USE_LIFESPAN = False) --------
+    @app.on_event("startup")
+    def startup_event() -> None:
+        db.init_engine()
+        db.create_all()
+        logger.info("Tables ensured on startup", extra={"env": settings.app_env})
+
+    @app.on_event("shutdown")
+    def shutdown_event() -> None:
+        db.close_engine()
+        logger.info("Tables closed on shutdown", extra={"env": settings.app_env})
 
 # Middleware & routes
 app.add_middleware(
