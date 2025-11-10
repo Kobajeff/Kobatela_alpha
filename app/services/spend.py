@@ -1,5 +1,7 @@
 """Spend management services."""
 import logging
+from datetime import UTC
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
 from app.models.spend import AllowedUsage, Merchant, Purchase, PurchaseStatus, SpendCategory
+from app.models.usage_mandate import UsageMandate, UsageMandateStatus
 from app.schemas.spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -129,6 +132,85 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
 
     category_id = payload.category_id or merchant.category_id
 
+    now = utcnow()
+    mandate_stmt = (
+        select(UsageMandate)
+        .where(UsageMandate.beneficiary_id == payload.sender_id)
+        .where(UsageMandate.status == UsageMandateStatus.ACTIVE)
+        .where(UsageMandate.currency == payload.currency)
+        .order_by(UsageMandate.expires_at.asc(), UsageMandate.id.asc())
+    )
+    mandate = db.execute(mandate_stmt).scalars().first()
+
+    if mandate is None:
+        logger.warning(
+            "Unauthorized purchase: no active mandate",
+            extra={"beneficiary_id": payload.sender_id, "merchant_id": merchant.id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_REQUIRED", "No active usage mandate for beneficiary."),
+        )
+
+    mandate_expires_at = mandate.expires_at
+    if mandate_expires_at.tzinfo is None:
+        mandate_expires_at = mandate_expires_at.replace(tzinfo=UTC)
+
+    if mandate_expires_at <= now:
+        mandate.status = UsageMandateStatus.EXPIRED
+        db.commit()
+        logger.warning(
+            "Unauthorized purchase: mandate expired",
+            extra={"mandate_id": mandate.id, "beneficiary_id": payload.sender_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_EXPIRED", "Usage mandate has expired."),
+        )
+
+    if mandate.allowed_merchant_id is not None and mandate.allowed_merchant_id != merchant.id:
+        logger.warning(
+            "Unauthorized purchase: merchant forbidden by mandate",
+            extra={
+                "mandate_id": mandate.id,
+                "beneficiary_id": payload.sender_id,
+                "merchant_id": merchant.id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_MERCHANT_FORBIDDEN", "Merchant not allowed for this mandate."),
+        )
+
+    if mandate.allowed_category_id is not None and mandate.allowed_category_id != category_id:
+        logger.warning(
+            "Unauthorized purchase: category forbidden by mandate",
+            extra={
+                "mandate_id": mandate.id,
+                "beneficiary_id": payload.sender_id,
+                "category_id": category_id,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_CATEGORY_FORBIDDEN", "Category not allowed for this mandate."),
+        )
+
+    if mandate.total_amount < payload.amount:
+        logger.warning(
+            "Unauthorized purchase: mandate balance exceeded",
+            extra={
+                "mandate_id": mandate.id,
+                "beneficiary_id": payload.sender_id,
+                "attempt_amount": str(payload.amount),
+                "remaining_amount": str(mandate.total_amount),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_BALANCE_EXCEEDED", "Mandate balance exceeded."),
+        )
+
     allowed = False
     direct_stmt = select(AllowedUsage).where(
         AllowedUsage.owner_id == payload.sender_id,
@@ -168,6 +250,11 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
         idempotency_key=idempotency_key,
     )
     db.add(purchase)
+
+    remaining_amount = mandate.total_amount - payload.amount
+    mandate.total_amount = remaining_amount
+    if remaining_amount <= Decimal("0"):
+        mandate.status = UsageMandateStatus.CONSUMED
 
     try:
         db.flush()
