@@ -1,12 +1,14 @@
-"""Escrow service logic."""
+"""Escrow domain services."""
 import logging
-from decimal import Decimal , InvalidOperation , ROUND_HALF_UP
-from typing import Any 
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditLog
 from app.models.escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
 from app.schemas.escrow import EscrowCreate, EscrowDepositCreate, EscrowActionPayload
 from app.services.idempotency import get_existing_by_key
@@ -14,6 +16,7 @@ from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+
 
 def _to_decimal(value: Any) -> Decimal:
     """
@@ -32,6 +35,28 @@ def _to_decimal(value: Any) -> Decimal:
     # Normalise à 2 décimales (montants en devise)
     return d.quantize(Decimal("0.01"))
 
+
+def _audit(
+    db: Session,
+    *,
+    actor: str,
+    action: str,
+    escrow: EscrowAgreement,
+    data: dict[str, Any],
+) -> None:
+    """Persist an audit trail entry for escrow state changes."""
+
+    db.add(
+        AuditLog(
+            actor=actor,
+            action=action,
+            entity="EscrowAgreement",
+            entity_id=escrow.id,
+            data_json=data,
+            at=utcnow(),
+        )
+    )
+
 def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     """Create a new escrow agreement."""
 
@@ -45,6 +70,18 @@ def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
         status=EscrowStatus.DRAFT,
     )
     db.add(agreement)
+    db.flush()
+    _audit(
+        db,
+        actor="client",
+        action="ESCROW_CREATED",
+        escrow=agreement,
+        data={
+            "status": agreement.status.value,
+            "amount_total": str(agreement.amount_total),
+            "currency": agreement.currency,
+        },
+    )
     db.commit()
     db.refresh(agreement)
     logger.info("Escrow created", extra={"escrow_id": agreement.id})
@@ -99,6 +136,17 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
             at=utcnow(),
         )
         db.add(event)
+        _audit(
+            db,
+            actor="system",
+            action="ESCROW_DEPOSITED",
+            escrow=agreement,
+            data={
+                "amount": str(amount_dec),
+                "status": agreement.status.value,
+                "idempotency_key": idempotency_key,
+            },
+        )
         db.commit()
         db.refresh(agreement)
         logger.info("Escrow deposit processed", extra={"escrow_id": agreement.id, "status": agreement.status})
@@ -128,6 +176,13 @@ def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) ->
         at=utcnow(),
     )
     db.add(event)
+    _audit(
+        db,
+        actor="provider",
+        action="ESCROW_PROOF_UPLOADED",
+        escrow=agreement,
+        data={"status": agreement.status.value, "proof_url": payload.proof_url},
+    )
     db.commit()
     db.refresh(agreement)
     logger.info("Escrow marked delivered", extra={"escrow_id": agreement.id})
@@ -145,6 +200,13 @@ def client_approve(db: Session, escrow_id: int, payload: EscrowActionPayload | N
         at=utcnow(),
     )
     db.add(event)
+    _audit(
+        db,
+        actor="client",
+        action="ESCROW_RELEASED",
+        escrow=agreement,
+        data={"status": agreement.status.value, "note": payload.note if payload else None},
+    )
     db.commit()
     db.refresh(agreement)
     logger.info("Escrow approved", extra={"escrow_id": agreement.id})
@@ -173,6 +235,16 @@ def client_reject(db: Session, escrow_id: int, payload: EscrowActionPayload | No
         at=utcnow(),
     )
     db.add(event)
+    _audit(
+        db,
+        actor="client",
+        action="ESCROW_REJECTED" if agreement.status != EscrowStatus.CANCELLED else "ESCROW_CANCELLED",
+        escrow=agreement,
+        data={
+            "status": agreement.status.value,
+            "note": payload.note if payload else None,
+        },
+    )
     db.commit()
     db.refresh(agreement)
     logger.info("Escrow rejected", extra={"escrow_id": agreement.id, "status": agreement.status})
