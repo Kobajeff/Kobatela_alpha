@@ -1,32 +1,19 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
-from datetime import datetime
-from config.settings import engine as db_engine
-from models.base import Base 
-from users.users import User  # Assurez-vous que `users` est bien importé AVANT `transactions`
+# transactions/models.py  (NOUVELLE VERSION — pont fin)
 
+# Ré-exports vers la vraie définition du modèle et l’engine/session de l’app
+from app.models.transaction import Transaction  # <- le SEUL ORM pour la table
+from app.models.base import Base
 
+# Option "legacy" si certains imports anciens s'attendent à trouver engine ici
+try:
+    from app.db import engine as db_engine, SessionLocal
+except Exception:  # si ton projet expose l'engine ailleurs
+    from config.settings import engine as db_engine  # fallback temporaire
+    from sqlalchemy.orm import sessionmaker
+    SessionLocal = sessionmaker(bind=db_engine)
 
-class Transaction(Base):
-    __tablename__ = "transactions"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    sender_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    receiver_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    amount = Column(Float, nullable=False)
-    currency = Column(String(10), nullable=False, default="USD")
-    status = Column(String(20), nullable=False, default="pending")  # pending, completed, failed
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    def __repr__(self):
-        return f"<Transaction(id={self.id}, sender={self.sender_id or 'N/A'}, receiver={self.receiver_id or 'N/A'}, amount={self.amount}, status={self.status})>"
-    
-# Créer une session locale
-SessionLocal = sessionmaker(bind=db_engine)
-# Function to get a new session
 def get_session():
+    """Alias legacy pour compat tests existants."""
     return SessionLocal()
 
-# Créer la base de données et les tables si elles n'existent pas encore
-
-Base.metadata.create_all(bind=db_engine)
+__all__ = ["Transaction", "Base", "db_engine", "get_session", "SessionLocal"]
