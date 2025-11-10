@@ -5,14 +5,15 @@ import os
 import sys
 from pathlib import Path
 from logging.config import fileConfig
-from app import models
-from alembic import context
-from sqlalchemy import engine_from_config, pool
 
 # --- Monter le PYTHONPATH sur la racine du projet (…/kobatela_alpha)
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from app import models
+from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 # --- Imports robustes (nouvelle/ancienne arbo)
 try:

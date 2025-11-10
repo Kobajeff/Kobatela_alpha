@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import AppInfo, get_settings
-from app.core import database as db              # moteur/metadata centralisés
+from app import db                               # moteur/metadata centralisés
 from app.core.logging import get_logger, setup_logging
 import app.models                                # enregistre les tables
 from app.routers import get_api_router
@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     logger.info("Application startup", extra={"env": settings.app_env})
     db.init_engine()                              # sync, idempotent
     # IMPORTANT : créer les tables ici quand on utilise lifespan
-    db.Base.metadata.create_all(bind=db.engine)
+    db.create_all()
     try:
         yield
     finally:
@@ -45,7 +45,7 @@ else:
     @app.on_event("startup")
     def startup_event() -> None:
         db.init_engine()
-        db.Base.metadata.create_all(bind=db.engine)
+        db.create_all()
         logger.info("Tables ensured on startup", extra={"env": settings.app_env})
 
     @app.on_event("shutdown")
