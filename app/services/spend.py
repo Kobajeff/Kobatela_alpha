@@ -1,6 +1,6 @@
 """Spend management services."""
 import logging
-from datetime import datetime
+from datetime import datetime , UTC
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -226,6 +226,22 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             detail=error_response("MANDATE_REQUIRED", "No active usage mandate for beneficiary."),
         )
 
+    mandate_expires_at = mandate.expires_at
+    if mandate_expires_at.tzinfo is None:
+        mandate_expires_at = mandate_expires_at.replace(tzinfo=UTC)
+
+    if mandate_expires_at <= now:
+        mandate.status = UsageMandateStatus.EXPIRED
+        db.commit()
+        logger.warning(
+            "Unauthorized purchase: mandate expired",
+            extra={"mandate_id": mandate.id, "beneficiary_id": payload.sender_id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_EXPIRED", "Usage mandate has expired."),
+        )
+
     if mandate.allowed_merchant_id is not None and mandate.allowed_merchant_id != merchant.id:
         logger.warning(
             "Unauthorized purchase: merchant forbidden by mandate",
@@ -252,6 +268,21 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=error_response("MANDATE_CATEGORY_FORBIDDEN", "Category not allowed for this mandate."),
+        )
+
+    if mandate.total_amount < payload.amount:
+        logger.warning(
+            "Unauthorized purchase: mandate balance exceeded",
+            extra={
+                "mandate_id": mandate.id,
+                "beneficiary_id": payload.sender_id,
+                "attempt_amount": str(payload.amount),
+                "remaining_amount": str(mandate.total_amount),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("MANDATE_BALANCE_EXCEEDED", "Mandate balance exceeded."),
         )
 
     allowed = False
@@ -324,6 +355,11 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
         idempotency_key=idempotency_key,
     )
     db.add(purchase)
+
+    remaining_amount = mandate.total_amount - payload.amount
+    mandate.total_amount = remaining_amount
+    if remaining_amount <= Decimal("0"):
+        mandate.status = UsageMandateStatus.CONSUMED
 
     try:
         db.flush()

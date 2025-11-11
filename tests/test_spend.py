@@ -48,6 +48,14 @@ async def test_purchase_requires_authorization(client, auth_headers):
     assert unauthorized.status_code == 403
     assert unauthorized.json()["error"]["code"] == "MANDATE_REQUIRED"
 
+    sender = await client.post(
+        "/users",
+        json={"username": "diaspora", "email": "diaspora@example.com"},
+        headers=auth_headers,
+    )
+    assert sender.status_code == 201
+    sender_id = sender.json()["id"]
+
     future_expiry = datetime.now(tz=UTC) + timedelta(days=7)
     mandate = await client.post(
         "/mandates",
@@ -144,6 +152,14 @@ async def test_purchase_by_category_and_idempotency(client, auth_headers):
     assert allow.json()["status"] in {"added", "exists"}
 
     key = str(uuid4())
+    sender = await client.post(
+        "/users",
+        json={"username": "diaspora-cat", "email": "diaspora-cat@example.com"},
+        headers=auth_headers,
+    )
+    assert sender.status_code == 201
+    sender_id = sender.json()["id"]
+
     future_expiry = datetime.now(tz=UTC) + timedelta(days=7)
     mandate = await client.post(
         "/mandates",
