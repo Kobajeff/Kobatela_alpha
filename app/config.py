@@ -1,6 +1,7 @@
 """Application configuration settings."""
 from functools import lru_cache
-from pydantic import BaseModel
+
+from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,8 +11,19 @@ class Settings(BaseSettings):
     app_env: str = "dev"
     database_url: str = "sqlite:///kobatella.db"
     api_key: str = "dev-secret-key"
+    psp_webhook_secret: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", env_file_encoding="utf-8")
+
+    @field_validator("psp_webhook_secret")
+    @classmethod
+    def _strip_empty_secret(cls, value: str | None) -> str | None:
+        """Normalise empty webhook secrets to ``None`` for easier validation."""
+
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class AppInfo(BaseModel):

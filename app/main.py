@@ -8,9 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import AppInfo, get_settings
-from app.core import database as db              # moteur/metadata centralisés
+from app import db  # moteur/metadata centralisés
 from app.core.logging import get_logger, setup_logging
-import app.models                                # enregistre les tables
+import app.models  # enregistre les tables
 from app.routers import get_api_router
 from app.utils.errors import error_response
 
@@ -22,9 +22,11 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("Application startup", extra={"env": settings.app_env})
-    db.init_engine()                              # sync, idempotent
+    if settings.psp_webhook_secret is None:
+        raise RuntimeError("PSP_WEBHOOK_SECRET manquant : configurez la variable d'environnement ou le fichier .env")
+    db.init_engine()  # sync, idempotent
     # IMPORTANT : créer les tables ici quand on utilise lifespan
-    db.Base.metadata.create_all(bind=db.engine)
+    db.create_all()
     try:
         yield
     finally:
@@ -33,25 +35,7 @@ async def lifespan(app: FastAPI):
 
 app_info = AppInfo()
 
-# Permet le basculement sans casser la prod/tests
-USE_LIFESPAN = getattr(settings, "use_lifespan", True)
-
-if USE_LIFESPAN:
-    app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
-else:
-    app = FastAPI(title=app_info.name, version=app_info.version)
-
-    # -------- Ancien mécanisme on_event (seulement si USE_LIFESPAN = False) --------
-    @app.on_event("startup")
-    def startup_event() -> None:
-        db.init_engine()
-        db.Base.metadata.create_all(bind=db.engine)
-        logger.info("Tables ensured on startup", extra={"env": settings.app_env})
-
-    @app.on_event("shutdown")
-    def shutdown_event() -> None:
-        db.close_engine()
-        logger.info("Tables closed on shutdown", extra={"env": settings.app_env})
+app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
 
 # Middleware & routes
 app.add_middleware(
