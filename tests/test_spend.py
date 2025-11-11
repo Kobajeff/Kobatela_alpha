@@ -10,7 +10,19 @@ from app.models import Merchant, Purchase, PurchaseStatus, User
 
 @pytest.mark.anyio("asyncio")
 async def test_purchase_requires_authorization(client, auth_headers):
-    user = await client.post("/users", json={"username": "buyer", "email": "buyer@example.com"}, headers=auth_headers)
+    sender = await client.post(
+        "/users",
+        json={"username": "diaspora", "email": "diaspora@example.com"},
+        headers=auth_headers,
+    )
+    assert sender.status_code == 201
+    sender_id = sender.json()["id"]
+
+    user = await client.post(
+        "/users",
+        json={"username": "buyer", "email": "buyer@example.com"},
+        headers=auth_headers,
+    )
     assert user.status_code == 201
     user_id = user.json()["id"]
 
@@ -25,7 +37,8 @@ async def test_purchase_requires_authorization(client, auth_headers):
     unauthorized = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": user_id,
+            "sender_id": sender_id,
+            "beneficiary_id": user_id,
             "merchant_id": merchant_id,
             "amount": 42.0,
             "currency": "USD",
@@ -62,7 +75,8 @@ async def test_purchase_requires_authorization(client, auth_headers):
     unauthorized_usage = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": user_id,
+            "sender_id": sender_id,
+            "beneficiary_id": user_id,
             "merchant_id": merchant_id,
             "amount": 10.0,
             "currency": "USD",
@@ -83,7 +97,8 @@ async def test_purchase_requires_authorization(client, auth_headers):
     purchase = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": user_id,
+            "sender_id": sender_id,
+            "beneficiary_id": user_id,
             "merchant_id": merchant_id,
             "amount": 42.0,
             "currency": "USD",
@@ -96,7 +111,19 @@ async def test_purchase_requires_authorization(client, auth_headers):
 
 @pytest.mark.anyio("asyncio")
 async def test_purchase_by_category_and_idempotency(client, auth_headers):
-    user = await client.post("/users", json={"username": "catbuyer", "email": "catbuyer@example.com"}, headers=auth_headers)
+    sender = await client.post(
+        "/users",
+        json={"username": "diaspora-cat", "email": "diaspora-cat@example.com"},
+        headers=auth_headers,
+    )
+    assert sender.status_code == 201
+    sender_id = sender.json()["id"]
+
+    user = await client.post(
+        "/users",
+        json={"username": "catbuyer", "email": "catbuyer@example.com"},
+        headers=auth_headers,
+    )
     assert user.status_code == 201
     user_id = user.json()["id"]
 
@@ -152,7 +179,8 @@ async def test_purchase_by_category_and_idempotency(client, auth_headers):
     purchase = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": user_id,
+            "sender_id": sender_id,
+            "beneficiary_id": user_id,
             "merchant_id": merchant_id,
             "amount": 15.5,
             "currency": "EUR",
@@ -166,7 +194,8 @@ async def test_purchase_by_category_and_idempotency(client, auth_headers):
     retry = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": user_id,
+            "sender_id": sender_id,
+            "beneficiary_id": user_id,
             "merchant_id": merchant_id,
             "amount": 15.5,
             "currency": "EUR",

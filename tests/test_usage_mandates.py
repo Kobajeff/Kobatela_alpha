@@ -42,6 +42,13 @@ async def test_create_usage_mandate(client, auth_headers):
 
 @pytest.mark.anyio("asyncio")
 async def test_purchase_blocked_without_mandate(client, auth_headers):
+    sender = await client.post(
+        "/users",
+        json={"username": "nomandate-sender", "email": "nomandate-sender@example.com"},
+        headers=auth_headers,
+    )
+    assert sender.status_code == 201
+
     user = await client.post(
         "/users",
         json={"username": "nomandate", "email": "nomandate@example.com"},
@@ -58,7 +65,8 @@ async def test_purchase_blocked_without_mandate(client, auth_headers):
     purchase = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": user.json()["id"],
+            "sender_id": sender.json()["id"],
+            "beneficiary_id": user.json()["id"],
             "merchant_id": merchant.json()["id"],
             "amount": 10.0,
             "currency": "USD",
@@ -107,7 +115,8 @@ async def test_purchase_allowed_under_mandate(client, auth_headers):
     purchase = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": beneficiary.json()["id"],
+            "sender_id": sender.json()["id"],
+            "beneficiary_id": beneficiary.json()["id"],
             "merchant_id": merchant.json()["id"],
             "amount": 25.0,
             "currency": "USD",
@@ -157,7 +166,8 @@ async def test_purchase_denied_by_mandate_restrictions(client, auth_headers):
     denied = await client.post(
         "/spend/purchases",
         json={
-            "sender_id": beneficiary.json()["id"],
+            "sender_id": sender.json()["id"],
+            "beneficiary_id": beneficiary.json()["id"],
             "merchant_id": blocked_merchant.json()["id"],
             "amount": 5.0,
             "currency": "USD",
@@ -192,3 +202,71 @@ def test_close_expired_mandates(db_session):
 
     db_session.refresh(mandate)
     assert mandate.status is UsageMandateStatus.EXPIRED
+
+
+@pytest.mark.anyio("asyncio")
+async def test_purchase_rejects_different_sender(
+    client,
+    auth_headers,
+    make_users_merchants_mandate,
+):
+    sender_user, beneficiary_user, merchant_id = make_users_merchants_mandate(
+        total="50.00",
+        currency="EUR",
+    )
+
+    wrong_sender = await client.post(
+        "/users",
+        json={"username": "wrong-sender", "email": "wrong-sender@example.com"},
+        headers=auth_headers,
+    )
+    assert wrong_sender.status_code == 201
+
+    response = await client.post(
+        "/spend/purchases",
+        json={
+            "sender_id": wrong_sender.json()["id"],
+            "beneficiary_id": beneficiary_user.id,
+            "merchant_id": merchant_id,
+            "amount": "20.00",
+            "currency": "EUR",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "MANDATE_REQUIRED"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_concurrent_spends_are_atomic(
+    client,
+    auth_headers,
+    make_users_merchants_mandate,
+):
+    sender_user, beneficiary_user, merchant_id = make_users_merchants_mandate(
+        total="30.00",
+        currency="USD",
+    )
+
+    payload = {
+        "sender_id": sender_user.id,
+        "beneficiary_id": beneficiary_user.id,
+        "merchant_id": merchant_id,
+        "amount": "20.00",
+        "currency": "USD",
+    }
+
+    first = await client.post(
+        "/spend/purchases",
+        json=payload,
+        headers={**auth_headers, "Idempotency-Key": "mandate-k1"},
+    )
+    second = await client.post(
+        "/spend/purchases",
+        json=payload,
+        headers={**auth_headers, "Idempotency-Key": "mandate-k2"},
+    )
+
+    codes = sorted([first.status_code, second.status_code])
+    assert codes == [201, 409]

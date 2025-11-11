@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.audit import AuditLog
 from app.models.spend import Merchant, SpendCategory
 from app.models.usage_mandate import UsageMandate, UsageMandateStatus
 from app.models.user import User
@@ -16,6 +18,27 @@ from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_mandate(
+    db: Session,
+    *,
+    actor: str,
+    action: str,
+    mandate_id: int,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Persist an audit log entry for mandate lifecycle events."""
+
+    audit = AuditLog(
+        actor=actor,
+        action=action,
+        entity="UsageMandate",
+        entity_id=mandate_id,
+        data_json=data or {},
+        at=utcnow(),
+    )
+    db.add(audit)
 
 
 def _ensure_user(db: Session, user_id: int, *, role: str) -> None:
@@ -72,6 +95,19 @@ def create_mandate(db: Session, payload: UsageMandateCreate) -> UsageMandate:
         status=UsageMandateStatus.ACTIVE,
     )
     db.add(mandate)
+    db.flush()
+    _audit_mandate(
+        db,
+        actor=f"sender:{payload.sender_id}",
+        action="MANDATE_CREATED",
+        mandate_id=mandate.id,
+        data={
+            "beneficiary_id": payload.beneficiary_id,
+            "currency": payload.currency,
+            "total_amount": str(payload.total_amount),
+            "expires_at": expires_at.isoformat(),
+        },
+    )
     db.commit()
     db.refresh(mandate)
     logger.info(
@@ -96,7 +132,27 @@ def close_expired_mandates(db: Session, *, reference_time: datetime | None = Non
 
     for mandate in mandates:
         mandate.status = UsageMandateStatus.EXPIRED
+        _audit_mandate(
+            db,
+            actor="system",
+            action="MANDATE_EXPIRED",
+            mandate_id=mandate.id,
+            data={"expired_at": now.isoformat()},
+        )
 
     db.commit()
     logger.info("Expired mandates closed", extra={"count": len(mandates)})
     return len(mandates)
+
+
+def audit_mandate_event(
+    db: Session,
+    *,
+    actor: str,
+    action: str,
+    mandate_id: int,
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Public helper so other services can log mandate events."""
+
+    _audit_mandate(db, actor=actor, action=action, mandate_id=mandate_id, data=data)

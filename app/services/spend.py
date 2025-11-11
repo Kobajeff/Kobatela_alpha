@@ -1,10 +1,10 @@
 """Spend management services."""
 import logging
-from datetime import UTC
+from datetime import datetime , UTC
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_, case, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,11 +17,81 @@ from app.schemas.spend import (
     PurchaseCreate,
     SpendCategoryCreate,
 )
+from app.services.mandates import audit_mandate_event
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_beneficiary(payload: PurchaseCreate) -> int:
+    """Return the beneficiary performing the spend."""
+
+    return payload.beneficiary_id or payload.sender_id
+
+
+def _find_active_mandate_for_purchase(
+    db: Session,
+    *,
+    sender_id: int,
+    beneficiary_id: int,
+    currency: str,
+    now: datetime,
+) -> UsageMandate | None:
+    stmt = (
+        select(UsageMandate)
+        .where(
+            and_(
+                UsageMandate.sender_id == sender_id,
+                UsageMandate.beneficiary_id == beneficiary_id,
+                UsageMandate.currency == currency,
+                UsageMandate.status == UsageMandateStatus.ACTIVE,
+                UsageMandate.expires_at > now,
+            )
+        )
+        .order_by(UsageMandate.expires_at.asc(), UsageMandate.id.asc())
+        .limit(1)
+    )
+    return db.execute(stmt).scalar_one_or_none()
+
+
+def _consume_mandate_atomic(
+    db: Session,
+    *,
+    mandate: UsageMandate,
+    sender_id: int,
+    beneficiary_id: int,
+    currency: str,
+    amount: Decimal,
+    now: datetime,
+) -> bool:
+    new_total = UsageMandate.total_spent + amount
+    stmt = (
+        update(UsageMandate)
+        .where(
+            and_(
+                UsageMandate.id == mandate.id,
+                UsageMandate.sender_id == sender_id,
+                UsageMandate.beneficiary_id == beneficiary_id,
+                UsageMandate.currency == currency,
+                UsageMandate.status == UsageMandateStatus.ACTIVE,
+                UsageMandate.expires_at > now,
+                new_total <= UsageMandate.total_amount,
+            )
+        )
+        .values(
+            total_spent=new_total,
+            status=case(
+                (new_total >= UsageMandate.total_amount, UsageMandateStatus.CONSUMED),
+                else_=UsageMandateStatus.ACTIVE,
+            ),
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    result = db.execute(stmt)
+    return result.rowcount == 1
 
 
 def create_category(db: Session, payload: SpendCategoryCreate) -> SpendCategory:
@@ -130,22 +200,26 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             detail=error_response("MERCHANT_NOT_FOUND", "Merchant not found."),
         )
 
+    beneficiary_id = _resolve_beneficiary(payload)
     category_id = payload.category_id or merchant.category_id
 
     now = utcnow()
-    mandate_stmt = (
-        select(UsageMandate)
-        .where(UsageMandate.beneficiary_id == payload.sender_id)
-        .where(UsageMandate.status == UsageMandateStatus.ACTIVE)
-        .where(UsageMandate.currency == payload.currency)
-        .order_by(UsageMandate.expires_at.asc(), UsageMandate.id.asc())
+    mandate = _find_active_mandate_for_purchase(
+        db,
+        sender_id=payload.sender_id,
+        beneficiary_id=beneficiary_id,
+        currency=payload.currency,
+        now=now,
     )
-    mandate = db.execute(mandate_stmt).scalars().first()
 
     if mandate is None:
         logger.warning(
             "Unauthorized purchase: no active mandate",
-            extra={"beneficiary_id": payload.sender_id, "merchant_id": merchant.id},
+            extra={
+                "sender_id": payload.sender_id,
+                "beneficiary_id": beneficiary_id,
+                "merchant_id": merchant.id,
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -173,7 +247,7 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             "Unauthorized purchase: merchant forbidden by mandate",
             extra={
                 "mandate_id": mandate.id,
-                "beneficiary_id": payload.sender_id,
+                "beneficiary_id": beneficiary_id,
                 "merchant_id": merchant.id,
             },
         )
@@ -187,7 +261,7 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             "Unauthorized purchase: category forbidden by mandate",
             extra={
                 "mandate_id": mandate.id,
-                "beneficiary_id": payload.sender_id,
+                "beneficiary_id": beneficiary_id,
                 "category_id": category_id,
             },
         )
@@ -213,14 +287,14 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
 
     allowed = False
     direct_stmt = select(AllowedUsage).where(
-        AllowedUsage.owner_id == payload.sender_id,
+        AllowedUsage.owner_id == beneficiary_id,
         AllowedUsage.merchant_id == merchant.id,
     )
     if db.execute(direct_stmt).first():
         allowed = True
     elif category_id is not None:
         category_stmt = select(AllowedUsage).where(
-            AllowedUsage.owner_id == payload.sender_id,
+            AllowedUsage.owner_id == beneficiary_id,
             AllowedUsage.category_id == category_id,
         )
         if db.execute(category_stmt).first():
@@ -231,6 +305,7 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             "Unauthorized usage attempt",
             extra={
                 "sender_id": payload.sender_id,
+                "beneficiary_id": beneficiary_id,
                 "merchant_id": payload.merchant_id,
                 "category_id": category_id,
             },
@@ -240,11 +315,41 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             detail=error_response("UNAUTHORIZED_USAGE", "Sender is not authorized for this purchase."),
         )
 
-    purchase = Purchase(
+    amount = payload.amount
+    consumed = _consume_mandate_atomic(
+        db,
+        mandate=mandate,
         sender_id=payload.sender_id,
+        beneficiary_id=beneficiary_id,
+        currency=payload.currency,
+        amount=amount,
+        now=now,
+    )
+    if not consumed:
+        logger.warning(
+            "Mandate consumption failed",
+            extra={
+                "mandate_id": mandate.id,
+                "sender_id": payload.sender_id,
+                "beneficiary_id": beneficiary_id,
+                "attempt_amount": str(amount),
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response(
+                "MANDATE_CONFLICT",
+                "Mandate limit exceeded or concurrent spend detected.",
+            ),
+        )
+
+    db.refresh(mandate)
+
+    purchase = Purchase(
+        sender_id=beneficiary_id,
         merchant_id=merchant.id,
         category_id=category_id,
-        amount=payload.amount,
+        amount=amount,
         currency=payload.currency,
         status=PurchaseStatus.COMPLETED,
         idempotency_key=idempotency_key,
@@ -270,12 +375,29 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
                 return existing
         raise
 
+    audit_mandate_event(
+        db,
+        actor=f"beneficiary:{beneficiary_id}",
+        action="MANDATE_CONSUMED",
+        mandate_id=mandate.id,
+        data={
+            "amount": str(amount),
+            "currency": payload.currency,
+            "purchase_id": purchase.id,
+            "total_spent": str(mandate.total_spent),
+            "total_amount": str(mandate.total_amount),
+        },
+    )
+
     audit = AuditLog(
         actor="system",
         action="CREATE_PURCHASE",
         entity="Purchase",
         entity_id=purchase.id,
-        data_json=payload.model_dump(mode="json"),
+        data_json={
+            **payload.model_dump(mode="json"),
+            "resolved_beneficiary_id": beneficiary_id,
+        },
         at=utcnow(),
     )
     db.add(audit)

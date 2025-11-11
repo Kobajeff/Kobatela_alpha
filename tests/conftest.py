@@ -1,8 +1,11 @@
 """Test configuration."""
 import asyncio
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -19,6 +22,13 @@ os.environ.setdefault("PSP_WEBHOOK_SECRET", "test-psp-secret")
 from app.main import app  # noqa: E402
 from app import models  # noqa: E402
 from app.db import get_db  # noqa: E402
+from app.models import (
+    Merchant,
+    SpendCategory,
+    UsageMandate,
+    UsageMandateStatus,
+    User,
+)
 
 DB_PATH = Path("./kobatella_test.db")
 
@@ -81,3 +91,58 @@ def auth_headers() -> dict[str, str]:
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.fixture
+def make_users_merchants_mandate(db_session: Session) -> Callable[..., tuple[User, User, int]]:
+    """Factory creating sender, beneficiary, merchant and active mandate."""
+
+    def _factory(
+        *,
+        sender: str = "diaspora",
+        beneficiary: str = "beneficiary",
+        total: str = "100.00",
+        currency: str = "USD",
+        expires_delta: timedelta = timedelta(days=7),
+        merchant_certified: bool = True,
+    ) -> tuple[User, User, int]:
+        timestamp = datetime.now(tz=UTC)
+
+        sender_user = User(
+            username=f"{sender}-{uuid4().hex[:8]}",
+            email=f"{sender}-{uuid4().hex[:8]}@example.com",
+        )
+        beneficiary_user = User(
+            username=f"{beneficiary}-{uuid4().hex[:8]}",
+            email=f"{beneficiary}-{uuid4().hex[:8]}@example.com",
+        )
+
+        category = SpendCategory(
+            code=f"CAT-{uuid4().hex[:6]}",
+            label=f"Category {beneficiary}",
+        )
+        merchant = Merchant(
+            name=f"merchant-{uuid4().hex[:8]}",
+            category=category,
+            is_certified=merchant_certified,
+        )
+
+        db_session.add_all([sender_user, beneficiary_user, category, merchant])
+        db_session.flush()
+
+        mandate = UsageMandate(
+            sender_id=sender_user.id,
+            beneficiary_id=beneficiary_user.id,
+            total_amount=Decimal(total),
+            currency=currency,
+            allowed_category_id=None,
+            allowed_merchant_id=merchant.id,
+            expires_at=timestamp + expires_delta,
+            status=UsageMandateStatus.ACTIVE,
+        )
+        db_session.add(mandate)
+        db_session.flush()
+
+        return sender_user, beneficiary_user, merchant.id
+
+    return _factory
