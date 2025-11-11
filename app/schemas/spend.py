@@ -57,6 +57,7 @@ class AllowedUsageCreate(BaseModel):
 
 class PurchaseCreate(BaseModel):
     sender_id: int
+    beneficiary_id: int | None = None
     merchant_id: int
     amount: Decimal = Field(gt=Decimal("0"))
     currency: str = Field(default="USD", pattern="^(USD|EUR)$")
