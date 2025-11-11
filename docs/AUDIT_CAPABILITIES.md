@@ -1,59 +1,59 @@
-# Kobatela_alpha — Capability & Stability Audit (2025-11-11)
+# Kobatela_alpha — Capability & Stability Audit (2025-11-10)
 
 ## A. Executive summary
-- ✅ Couche monétaire homogène : montants d'achats et mandats sont stockés en `Decimal` via modèles et migration dédiés, éliminant les dérives binaires.【F:app/models/spend.py†L64-L83】【F:app/models/usage_mandate.py†L22-L45】【F:alembic/versions/2c2680073b35_use_decimal_for_purchases_amount.py†L17-L38】
-- ✅ Contrôles mandataires dynamiques : chaque achat vérifie marchand, catégorie, expiration et solde avant validation, avec tests HTTP couvrant les refus attendus.【F:app/services/spend.py†L133-L212】【F:tests/test_usage_mandates.py†L43-L169】
-- ✅ Webhook PSP durci : secret obligatoire, HMAC+timestamp, idempotence évènementielle et journalisation des règlements.【F:app/routers/psp.py†L20-L61】【F:app/services/psp_webhooks.py†L20-L144】【F:tests/test_psp_webhook.py†L32-L134】
-- ✅ Escrow traçable : chaque transition (création, dépôt, preuve, approbation) émet un `AuditLog`, garantissant la piste comptable.【F:app/services/escrow.py†L40-L119】【F:tests/test_escrow.py†L75-L120】
-- ✅ Suite de tests représentative : 29 tests couvrent mandats, dépenses, webhooks et escrows, assurant une régression rapide.【F:tests/test_usage_mandates.py†L1-L194】【F:tests/test_spend.py†L11-L200】【F:tests/test_psp_webhook.py†L32-L134】【1eef49†L1-L3】
-- ⚠️ P0 — Mandats non scellés au financeur : la recherche de mandat n'inclut pas `sender_id`, permettant de détourner le budget d'un autre expéditeur.【F:app/services/spend.py†L135-L143】
-- ⚠️ P0 — Concurrence sur la balance : décrément du mandat sans verrou ni requête atomique → deux achats simultanés peuvent dépasser le plafond.【F:app/services/spend.py†L254-L268】
-- ⚠️ P1 — Clé API unique et par défaut : une seule clé statique `dev-secret-key` suffit pour accéder à tout le backend.【F:app/config.py†L11-L38】【F:app/security.py†L7-L21】
-- ⚠️ P1 — Mandats sans audit trail : création et expiration ne produisent aucun `AuditLog`, compliquant les investigations.【F:app/services/mandates.py†L45-L102】
-- ⚠️ P2 — Expiration manuelle : le nettoyage des mandats repose sur une invocation `/mandates/cleanup` non planifiée.【F:app/routers/mandates.py†L12-L27】
-- Readiness score: **45 / 100** — les P0 sur l'authentification du mandat et la concurrence empêchent tout pilote externe.
+- ✅ Couche monétaire homogène : montants d'achats et mandats sont en `Decimal` avec migrations dédiées, ce qui évite les arrondis binaires et facilite les contrôles d'intégrité.【F:app/models/spend.py†L64-L83】【F:app/models/usage_mandate.py†L22-L45】【F:alembic/versions/2c2680073b35_use_decimal_for_purchases_amount.py†L17-L58】
+- ✅ Mandats d'usage actifs : le service d'orchestration vérifie la catégorie, le marchand, la devise et la balance restante avant toute dépense, avec tests API couvrant les refus attendus.【F:app/services/spend.py†L117-L286】【F:tests/test_usage_mandates.py†L1-L164】
+- ✅ Webhook PSP durci : la route impose un secret configuré, vérifie HMAC + dérive temporelle et refuse toute configuration absente, limitant les fraudes de règlement.【F:app/routers/psp.py†L1-L54】【F:app/services/psp_webhooks.py†L1-L96】
+- ✅ Traçabilité financière : les escrows et paiements émettent des `AuditLog` structurés à chaque transition critique, consolidant la piste d'audit comptable.【F:app/services/escrow.py†L1-L213】【F:app/services/psp_webhooks.py†L60-L96】
+- ✅ Outillage fiable : 29 tests asynchrones couvrent mandats, dépenses, webhooks et escrows, exécutés avec succès, gage de régression rapide.【855b8e†L1-L2】【F:tests/test_usage_mandates.py†L1-L194】
+- ⚠️ P0 — Mandat non scellé au donneur : `create_purchase` ne filtre que par bénéficiaire et devise, permettant qu'un mandat financé par un expéditeur soit détourné par un autre, ce qui casse l'engagement contractuel.【F:app/services/spend.py†L135-L143】
+- ⚠️ P0 — Concurrence sur la balance : deux achats simultanés recalculent la même balance et écrasent la valeur sans verrou, autorisant une dépense cumulée supérieure au plafond du mandat.【F:app/services/spend.py†L254-L258】
+- ⚠️ P1 — Authentification globale : l'ensemble des routes (hors /health) reposent sur une API key unique non scindée par rôle ni rotation, insuffisant pour un produit financier.【F:app/security.py†L1-L21】【F:app/routers/__init__.py†L10-L20】
+- ⚠️ P1 — Mandats sans historique : aucune entrée d'audit n'est créée lors de la création ou de la consommation d'un mandat, compliquant les investigations sur l'usage conditionnel.【F:app/services/mandates.py†L45-L102】
+- ⚠️ P2 — Nettoyage manuel : l'expiration des mandats repose sur un endpoint `/mandates/cleanup` appelé manuellement, sans planification ni garde automatique côté achat, ce qui peut laisser des mandats périmés actifs si la tâche n'est pas lancée.【F:app/routers/mandates.py†L12-L27】【F:app/services/mandates.py†L84-L102】
+- Readiness score: **50 / 100** — les fonctionnalités principales existent, mais les deux P0 sur la vérification des mandats bloquent un pilote externe.
 
 ## B. Capability map (current, concrete)
 ### B.1 Feature coverage
 | Feature | Implemented endpoints/modules | Status | Notes |
 | --- | --- | --- | --- |
-| Santé & métadonnées | `GET /health` → `health.healthcheck` | Implémenté | Ping simple sans dépendances.【F:app/routers/health.py†L4-L11】 |
-| Création utilisateurs | `POST /users`, `GET /users/{id}` | Implémenté | CRUD basique protégé par clé API.【F:app/routers/users.py†L12-L31】 |
-| Alertes opérationnelles | `GET /alerts` | Implémenté | Filtre par type avec dépendance DB synchrone.【F:app/routers/alerts.py†L11-L19】 |
-| Escrow lifecycle | `/escrows` + service | Implémenté | Gestion complète avec idempotence dépôts et audits.【F:app/routers/escrow.py†L12-L63】【F:app/services/escrow.py†L40-L149】 |
-| Allowlist & certification | `/allowlist`, `/certified` | Implémenté | Contrôles de doublons et estampille temps.【F:app/routers/transactions.py†L27-L64】 |
-| Transactions restreintes | `POST /transactions` | Implémenté | Idempotence via header et service dédié.【F:app/routers/transactions.py†L66-L75】【F:app/services/transactions.py†L25-L86】 |
-| Mandats d'usage | `/mandates`, `/mandates/cleanup` | Partiel | Création et expiration OK mais failles P0 sur rattachement et concurrence.【F:app/routers/mandates.py†L12-L27】【F:app/services/spend.py†L135-L268】 |
-| Spend categories & merchants | `/spend/categories`, `/spend/merchants` | Implémenté | Gestion CRUD + contrôles d'unicité.【F:app/routers/spend.py†L25-L33】【F:app/services/spend.py†L24-L88】 |
-| Purchases conditionnels | `POST /spend/purchases` | Partiel | Vérifie mandat/allowlist mais vulnérable aux P0 identifiés.【F:app/routers/spend.py†L40-L46】【F:app/services/spend.py†L133-L286】 |
-| Usage payees & payouts | `/spend/allowed`, `/spend` | Implémenté | Limites quotidiennes/totales + idempotence paiement.【F:app/routers/spend.py†L57-L105】【F:app/services/usage.py†L23-L198】 |
-| Proofs & géofence | `/proofs`, `/proofs/{id}/decision` | Implémenté | Contrôles EXIF, géofence et audit.【F:app/routers/proofs.py†L11-L33】【F:app/services/proofs.py†L45-L198】 |
-| Paiements sortants & webhooks | `/payments/execute/{id}`, `/psp/webhook` | Partiel | Exécution interne OK, dépend du renforcement clé API côté PSP.【F:app/routers/payments.py†L10-L17】【F:app/routers/psp.py†L20-L61】 |
+| Santé & métadonnées | `GET /health` → `health.healthcheck` | Implémenté | Ping simple sans dépendance.【F:app/routers/health.py†L1-L11】 |
+| Création utilisateurs | `POST /users`, `GET /users/{id}` | Implémenté | CRUD basique protégé par API key.【F:app/routers/users.py†L1-L31】 |
+| Alertes | `GET /alerts` | Implémenté | Liste filtrable pour signaux opérationnels.【F:app/routers/alerts.py†L1-L19】 |
+| Escrow lifecycle | Routes escrow + service | Implémenté | Création, dépôts, livraisons et décisions avec audit trail ajouté.【F:app/routers/escrow.py†L1-L63】【F:app/services/escrow.py†L1-L213】 |
+| Allowlist & certification | `/allowlist`, `/certified` | Implémenté | Ajout d'allowlist et niveaux de certification avec validations.【F:app/routers/transactions.py†L27-L63】 |
+| Transactions restreintes | `POST /transactions` | Implémenté | Vérifie allowlist + idempotence, journalise les décisions.【F:app/routers/transactions.py†L66-L87】【F:app/services/transactions.py†L25-L86】 |
+| Mandats d'usage | `/mandates`, `/mandates/cleanup` | Partiel | Création et expiration de mandats, mais failles P0 sur filtrage et concurrence.【F:app/routers/mandates.py†L12-L27】【F:app/services/mandates.py†L45-L102】 |
+| Spend categories & merchants | `/spend/categories`, `/spend/merchants` | Implémenté | Permet de structurer les politiques de dépense.【F:app/routers/spend.py†L25-L33】 |
+| Purchases conditionnels | `POST /spend/purchases` | Partiel | Vérifie mandats/allowlist/certif mais vulnérable aux deux P0 identifiés.【F:app/routers/spend.py†L40-L46】【F:app/services/spend.py†L117-L286】 |
+| Usage payees | `/spend/allowed`, `/spend` | Implémenté | Dépenses idempotentes vers payés autorisés avec limites quotidiennes/total.【F:app/routers/spend.py†L57-L105】【F:app/services/usage.py†L23-L235】 |
+| Proofs & géofence | `/proofs`, `/proofs/{id}/decision` | Implémenté | Contrôles EXIF/géofence avant déblocage des milestones.【F:app/routers/proofs.py†L1-L33】【F:app/services/proofs.py†L45-L318】 |
+| Paiements sortants | `POST /payments/execute/{id}` + webhook PSP | Partiel | Exécution et confirmations gérées, dépend du renforcement PSP et gouvernance clé API.【F:app/routers/payments.py†L1-L17】【F:app/routers/psp.py†L1-L54】 |
 
 ### B.2 Supported end-to-end flows (today)
-- Mandat conditionnel diaspora → bénéficiaire : création utilisateurs → `/mandates` → `/spend/purchases` avec contrôles marchand/catégorie et décrément du mandat.【F:app/routers/users.py†L12-L31】【F:app/routers/mandates.py†L12-L27】【F:app/services/spend.py†L133-L286】
-- Escrow basé sur preuves : `/escrows` → dépôt idempotent → `/proofs` → approbation client avec audit complet.【F:app/routers/escrow.py†L12-L63】【F:app/services/escrow.py†L40-L149】【F:app/services/proofs.py†L45-L198】
-- Transaction restreinte : `/allowlist` → `/transactions` (clé d'idempotence) → lecture transaction.【F:app/routers/transactions.py†L27-L87】【F:app/services/transactions.py†L25-L86】
-- Payout PSP : `/payments/execute/{id}` → webhook PSP signé qui clôture le paiement et journalise.【F:app/routers/payments.py†L10-L17】【F:app/services/psp_webhooks.py†L20-L144】
+- **Mandat conditionnel diaspora → bénéficiaire** : créer utilisateurs → poster `/mandates` → initier `/spend/purchases` avec contrôles de marchand/catégorie et décrément de balance.【F:app/routers/users.py†L1-L31】【F:app/routers/mandates.py†L12-L27】【F:app/services/spend.py†L117-L286】
+- **Escrow basé sur preuves** : `/escrows` → dépôt idempotent → `/proofs` avec validation EXIF → décision client qui déclenche audit + paiement.【F:app/routers/escrow.py†L1-L63】【F:app/services/escrow.py†L1-L213】【F:app/services/proofs.py†L45-L318】
+- **Transaction restreinte** : `/allowlist` → `/transactions` avec clé d'idempotence → audit et alerte en cas de refus.【F:app/routers/transactions.py†L27-L87】【F:app/services/transactions.py†L25-L86】
+- **Payout PSP** : `/payments/execute/{id}` → webhook PSP signé qui fixe le statut et écrit un audit.【F:app/routers/payments.py†L1-L17】【F:app/services/psp_webhooks.py†L1-L96】
 
 ## C. Endpoint inventory
 | Method | Path | Handler | Auth | Roles | Request | Response | Codes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GET | /health | `health.healthcheck` | Aucun | n/a | – | `{status:str}` | 200【F:app/routers/health.py†L4-L11】 |
-| POST | /users | `users.create_user` | API key | n/a | `UserCreate` | `UserRead` | 201【F:app/routers/users.py†L12-L23】 |
-| GET | /users/{id} | `users.get_user` | API key | n/a | Path ID | `UserRead` | 200/404【F:app/routers/users.py†L25-L31】 |
-| GET | /alerts | `alerts.list_alerts` | API key | n/a | Query `type` | `list[AlertRead]` | 200【F:app/routers/alerts.py†L11-L19】 |
-| POST | /escrows | `escrow.create_escrow` | API key | n/a | `EscrowCreate` | `EscrowRead` | 201【F:app/routers/escrow.py†L12-L17】 |
-| POST | /escrows/{id}/deposit | `escrow.deposit` | API key | n/a | `EscrowDepositCreate` + `Idempotency-Key` | `EscrowRead` | 200/409【F:app/routers/escrow.py†L20-L27】 |
+| GET | /health | `health.healthcheck` | Aucun | n/a | – | Dict statut | 200【F:app/routers/health.py†L1-L11】 |
+| POST | /users | `users.create_user` | API key | n/a | `UserCreate` | `UserRead` | 201【F:app/routers/users.py†L1-L22】 |
+| GET | /users/{user_id} | `users.get_user` | API key | n/a | Path ID | `UserRead` | 200/404【F:app/routers/users.py†L24-L31】 |
+| GET | /alerts | `alerts.list_alerts` | API key | n/a | Query `type` | `list[AlertRead]` | 200【F:app/routers/alerts.py†L1-L19】 |
+| POST | /escrows | `escrow.create_escrow` | API key | n/a | `EscrowCreate` | `EscrowRead` | 201【F:app/routers/escrow.py†L1-L17】 |
+| POST | /escrows/{id}/deposit | `escrow.deposit` | API key | n/a | `EscrowDepositCreate` + `Idempotency-Key` | `EscrowRead` | 200【F:app/routers/escrow.py†L20-L27】 |
 | POST | /escrows/{id}/mark-delivered | `escrow.mark_delivered` | API key | n/a | `EscrowActionPayload` | `EscrowRead` | 200【F:app/routers/escrow.py†L30-L33】 |
-| POST | /escrows/{id}/client-approve | `escrow.client_approve` | API key | n/a | Body optionnel | `EscrowRead` | 200【F:app/routers/escrow.py†L35-L41】 |
-| POST | /escrows/{id}/client-reject | `escrow.client_reject` | API key | n/a | Body optionnel | `EscrowRead` | 200【F:app/routers/escrow.py†L44-L50】 |
+| POST | /escrows/{id}/client-approve | `escrow.client_approve` | API key | n/a | Optional payload | `EscrowRead` | 200【F:app/routers/escrow.py†L35-L41】 |
+| POST | /escrows/{id}/client-reject | `escrow.client_reject` | API key | n/a | Optional payload | `EscrowRead` | 200【F:app/routers/escrow.py†L44-L50】 |
 | POST | /escrows/{id}/check-deadline | `escrow.check_deadline` | API key | n/a | Path ID | `EscrowRead` | 200【F:app/routers/escrow.py†L53-L55】 |
 | GET | /escrows/{id} | `escrow.read_escrow` | API key | n/a | Path ID | `EscrowRead` | 200/404【F:app/routers/escrow.py†L58-L63】 |
-| POST | /allowlist | `transactions.add_to_allowlist` | API key | n/a | `AllowlistCreate` | Statut dict | 201/200【F:app/routers/transactions.py†L27-L44】 |
-| POST | /certified | `transactions.add_certification` | API key | n/a | `CertificationCreate` | Statut dict | 201/200【F:app/routers/transactions.py†L46-L64】 |
-| POST | /transactions | `transactions.post_transaction` | API key | n/a | `TransactionCreate` + `Idempotency-Key` | `TransactionRead` | 201/409【F:app/routers/transactions.py†L66-L75】 |
-| GET | /transactions/{id} | `transactions.get_transaction` | API key | n/a | Path ID | `TransactionRead` | 200/404【F:app/routers/transactions.py†L78-L88】 |
+| POST | /allowlist | `transactions.add_to_allowlist` | API key | n/a | `AllowlistCreate` | Statut dict | 200/201【F:app/routers/transactions.py†L27-L43】 |
+| POST | /certified | `transactions.add_certification` | API key | n/a | `CertificationCreate` | Statut dict | 200/201【F:app/routers/transactions.py†L46-L63】 |
+| POST | /transactions | `transactions.post_transaction` | API key | n/a | `TransactionCreate` + `Idempotency-Key` | `TransactionRead` | 201【F:app/routers/transactions.py†L66-L75】 |
+| GET | /transactions/{id} | `transactions.get_transaction` | API key | n/a | Path ID | `TransactionRead` | 200/404【F:app/routers/transactions.py†L78-L87】 |
 | POST | /mandates | `mandates.create_mandate` | API key | n/a | `UsageMandateCreate` | `UsageMandateRead` | 201【F:app/routers/mandates.py†L12-L19】 |
 | POST | /mandates/cleanup | `mandates.cleanup_expired_mandates` | API key | n/a | – | `{expired:int}` | 202【F:app/routers/mandates.py†L22-L27】 |
 | POST | /spend/categories | `spend.create_category` | API key | n/a | `SpendCategoryCreate` | `SpendCategoryRead` | 201【F:app/routers/spend.py†L25-L27】 |
@@ -122,18 +122,21 @@
 ## H. Risk register (prioritized)
 | ID | Component | Risk | Impact | Likelihood | Priority | Recommendation |
 | --- | --- | --- | --- | --- | --- | --- |
-| R1 | Spend mandates | Mandat appliqué sans vérifier `sender_id` → un bénéficiaire peut dépenser le budget d'un autre financeur. | Très élevé (fraude directe) | Probable (surface triviale) | P0 | Ajouter filtre `UsageMandate.sender_id == payload.original_sender_id` + tests négatifs.【F:app/services/spend.py†L135-L143】 |
-| R2 | Spend mandates | Décrément du solde en mémoire sans verrou ; deux achats parallèles peuvent dépasser `total_amount`. | Très élevé (dépassement plafond) | Probable (multi-clients) | P0 | Utiliser `SELECT ... FOR UPDATE`/`with_for_update` ou `UPDATE ... WHERE total_amount >= amount` atomique, sinon transaction sérialisée.【F:app/services/spend.py†L254-L268】 |
-| R3 | Mandate service | Aucun `AuditLog` pour création/expiration de mandat. | Élevé (traçabilité manquante) | Elevé | P1 | Insérer un audit `USAGE_MANDATE_CREATED/EXPIRED/CONSUMED` dans le service.【F:app/services/mandates.py†L45-L102】 |
-| R4 | API security | Clé API unique `dev-secret-key` en clair. | Élevé (compromission totale) | Elevé | P1 | Externaliser dans secret manager, permettre clés multiples/rotation + scopes par rôle.【F:app/config.py†L11-L38】【F:app/security.py†L7-L21】 |
-| R5 | Mandate ops | Expiration dépend d'un endpoint manuel `/mandates/cleanup`. | Moyen (mandats périmés actifs) | Moyen | P2 | Planifier cron/worker ou vérifier expiration côté achat + jobs récurrents.【F:app/routers/mandates.py†L22-L27】 |
+| R1 | Usage mandates | Mandat sélectionné uniquement par bénéficiaire/devise ; un autre expéditeur peut consommer les fonds. | Critique | Élevée | P0 | Ajouter filtre `sender_id` et éventuellement un index unique `(sender_id, beneficiary_id, status='ACTIVE')` dans la requête/migration.【F:app/services/spend.py†L135-L143】【F:app/models/usage_mandate.py†L22-L45】 |
+| R2 | Usage mandates | Absence de verrouillage lors du décrément de balance → deux achats simultanés dépassent le plafond autorisé. | Critique | Moyenne | P0 | Charger le mandat `FOR UPDATE` ou utiliser `UPDATE ... WHERE total_amount >= montant` pour garantir l'atomicité, et rejeter si 0 ligne mise à jour.【F:app/services/spend.py†L254-L258】 |
+| R3 | Mandate auditing | Création/expiration/consommation sans `AuditLog`, rendant l'usage non traçable. | Élevé | Moyenne | P1 | Insérer des audits dans `create_mandate`, `close_expired_mandates` et la consommation dans `create_purchase`.【F:app/services/mandates.py†L45-L102】【F:app/services/spend.py†L243-L286】 |
+| R4 | Auth global | API key unique, pas de rotation ni scopes. | Élevé | Moyenne | P1 | Introduire JWT/clé par client + rotation + journalisation d'accès.【F:app/security.py†L1-L21】 |
+| R5 | Expiration mandats | Endpoint `/mandates/cleanup` à déclenchement manuel ; un oubli laisse des mandats expirés actifs (jusqu'à une tentative d'achat). | Moyen | Moyenne | P2 | Programmer une tâche périodique (cron worker) ou déclencher lors de chaque achat via job asynchrone.【F:app/routers/mandates.py†L22-L27】【F:app/services/mandates.py†L84-L102】 |
 
 ## I. Roadmap to MVP-ready
-- **P0** :
-  - Filtrer les mandats par `sender_id` + verrou transactionnel/UPDATE atomique pour la décrémentation.【F:app/services/spend.py†L135-L268】
-- **P1** :
-  - Ajouter audit trail (create/consume/expire) sur les mandats et renforcer la gouvernance des clés API (rotation, scopes).【F:app/services/mandates.py†L45-L102】【F:app/security.py†L7-L21】
-- **P2** :
-  - Automatiser la révocation des mandats expirés (cron, worker) et restreindre CORS en production.【F:app/routers/mandates.py†L22-L27】【F:app/main.py†L31-L40】
+- **P0**
+  - Filtrer les mandats par `sender_id` lors des achats et ajouter un verrou atomique sur la mise à jour de balance (migration + requête conditionnelle).【F:app/services/spend.py†L135-L258】
+  - Couvrir mandats par AuditLog (création, consommation, expiration) et tests associés.【F:app/services/mandates.py†L45-L102】【F:app/services/spend.py†L243-L286】
+- **P1**
+  - Remplacer l'API key globale par une authentification multi-acteurs (JWT, rôles) avec rotation et monitoring.【F:app/security.py†L1-L21】
+  - Documenter et automatiser le nettoyage des mandats expirés (tâche planifiée ou worker).【F:app/services/mandates.py†L84-L102】
+- **P2**
+  - Restreindre CORS et ajouter rate limiting pour limiter les abus clés API.【F:app/main.py†L31-L40】
+  - Étendre les métriques (Prometheus/OTel) en plus des logs JSON pour une observabilité complète.
 
-**Verdict : NO-GO tant que les correctifs P0 ne sont pas livrés et vérifiés en tests de charge concurrente.**
+**Verdict: NO-GO** — tant que les P0 sur la protection et l'atomicité des mandats ne sont pas corrigés, exposer 10 utilisateurs réels mettrait en péril les fonds.
