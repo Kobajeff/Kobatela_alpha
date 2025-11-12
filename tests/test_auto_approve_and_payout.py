@@ -1,5 +1,6 @@
 """Tests covering auto-approval and payout idempotency flows."""
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -63,7 +64,7 @@ async def test_auto_approve_photo_triggers_payout(client, auth_headers, db_sessi
         escrow_id=escrow_id,
         idx=1,
         label="Design delivery",
-        amount=250.0,
+        amount=Decimal("250.00"),
         proof_type="PHOTO",
         validator="SENDER",
         geofence_lat=5.3210,
@@ -103,7 +104,7 @@ async def test_auto_approve_photo_triggers_payout(client, auth_headers, db_sessi
 
     payment = db_session.scalars(select(Payment).where(Payment.milestone_id == milestone.id)).one()
     assert payment.status == PaymentStatus.SENT
-    assert payment.amount == pytest.approx(milestone.amount)
+    assert payment.amount == milestone.amount
 
     escrow = db_session.get(EscrowAgreement, escrow_id)
     db_session.refresh(escrow)
@@ -119,7 +120,7 @@ async def test_payout_idempotency_reuses_payment(client, auth_headers, db_sessio
         escrow_id=escrow_id,
         idx=1,
         label="Implementation delivery",
-        amount=300.0,
+        amount=Decimal("300.00"),
         proof_type="PHOTO",
         validator="SENDER",
         geofence_lat=5.0,
@@ -168,6 +169,51 @@ async def test_payout_idempotency_reuses_payment(client, auth_headers, db_sessio
 
 
 @pytest.mark.anyio("asyncio")
+async def test_execute_payout_rejects_error_reuse(client, auth_headers, db_session):
+    escrow_id = await _create_users_and_escrow(client, auth_headers)
+
+    milestone = Milestone(
+        escrow_id=escrow_id,
+        idx=1,
+        label="Error reuse",
+        amount=Decimal("150.00"),
+        proof_type="PHOTO",
+        validator="SENDER",
+        geofence_lat=5.0,
+        geofence_lng=-4.0,
+        geofence_radius_m=500.0,
+        status=MilestoneStatus.APPROVED,
+    )
+    db_session.add(milestone)
+    db_session.flush()
+
+    await _fund_escrow(client, escrow_id, 200.0, auth_headers, "auto-pay-error")
+
+    error_payment = Payment(
+        escrow_id=escrow_id,
+        milestone_id=milestone.id,
+        amount=milestone.amount,
+        status=PaymentStatus.ERROR,
+        idempotency_key="reuse-error",
+        psp_ref="PSP-error",
+    )
+    db_session.add(error_payment)
+    db_session.commit()
+
+    escrow = db_session.get(EscrowAgreement, escrow_id)
+    db_session.refresh(milestone)
+
+    with pytest.raises(ValueError, match="Existing payment is in ERROR"):
+        payments_service.execute_payout(
+            db_session,
+            escrow=escrow,
+            milestone=milestone,
+            amount=milestone.amount,
+            idempotency_key="reuse-error",
+        )
+
+
+@pytest.mark.anyio("asyncio")
 async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_session):
     escrow_id = await _create_users_and_escrow(client, auth_headers)
 
@@ -176,7 +222,7 @@ async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_s
             escrow_id=escrow_id,
             idx=1,
             label="Kickoff",
-            amount=120.0,
+            amount=Decimal("120.00"),
             proof_type="PHOTO",
             validator="SENDER",
             geofence_lat=5.1,
@@ -187,7 +233,7 @@ async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_s
             escrow_id=escrow_id,
             idx=2,
             label="Development",
-            amount=180.0,
+            amount=Decimal("180.00"),
             proof_type="PHOTO",
             validator="SENDER",
             geofence_lat=5.1,
@@ -198,7 +244,7 @@ async def test_three_milestones_chain_auto_and_manual(client, auth_headers, db_s
             escrow_id=escrow_id,
             idx=3,
             label="Launch",
-            amount=200.0,
+            amount=Decimal("200.00"),
             proof_type="PHOTO",
             validator="SENDER",
             geofence_lat=5.1,

@@ -1,5 +1,6 @@
 """Schemas for milestone entities."""
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,9 +9,9 @@ from app.models.milestone import MilestoneStatus
 
 class MilestoneCreate(BaseModel):
     escrow_id: int
-    idx: int = Field(ge=0)
+    idx: int = Field(gt=0)
     label: str = Field(min_length=1, max_length=200)
-    amount: float = Field(gt=0)
+    amount: Decimal = Field(gt=Decimal("0"))
     proof_type: str = Field(min_length=1, max_length=50)
     validator: str = Field(min_length=1, max_length=50)
     geofence_lat: float | None = Field(default=None)
@@ -23,7 +24,7 @@ class MilestoneRead(BaseModel):
     escrow_id: int
     idx: int
     label: str
-    amount: float
+    amount: Decimal
     proof_type: str
     validator: str
     geofence_lat: float | None

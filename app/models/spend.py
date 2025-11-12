@@ -1,6 +1,7 @@
 """Spend-related ORM models."""
 from __future__ import annotations
 
+from decimal import Decimal
 from enum import Enum
 
 from sqlalchemy import Boolean, CheckConstraint, Enum as SqlEnum, ForeignKey, Index, Numeric, String, UniqueConstraint
@@ -73,7 +74,7 @@ class Purchase(Base):
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     merchant_id: Mapped[int] = mapped_column(ForeignKey("merchants.id"), nullable=False, index=True)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("spend_categories.id"), nullable=True, index=True)
-    amount: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2, asdecimal=True), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
     status: Mapped[PurchaseStatus] = mapped_column(SqlEnum(PurchaseStatus), nullable=False, default=PurchaseStatus.COMPLETED)
     idempotency_key: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)

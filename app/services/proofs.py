@@ -1,5 +1,6 @@
 """Proof lifecycle services."""
 import logging
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -26,6 +27,17 @@ from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
+from typing import Final
+
+HARD_VALIDATION_ERRORS: Final = {
+    "OUT_OF_GEOFENCE",
+    "OUTSIDE_GEOFENCE",
+    "GEOFENCE_VIOLATION",
+    "TOO_OLD",
+    "MISSING_EXIF_TIMESTAMP",
+    "BAD_EXIF_TIMESTAMP",
+}
+
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +52,92 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             detail=error_response("MILESTONE_NOT_FOUND", "Milestone not found for escrow."),
         )
 
+    # NOTE: on NE vérifie PAS encore l’état (open milestone / WAITING / séquence).
+    # On commence par valider la PHOTO pour pouvoir renvoyer 422 immédiatement
+    # en cas d’erreur "dure" (géofence, exif manquant, trop vieux, etc.).
+
+    metadata_payload = dict(payload.metadata or {})
+    review_reason: str | None = None
+    auto_approve = False
+
+    # PHOTO: validations EXIF/GPS/âge + géofence
+    if milestone.proof_type == "PHOTO":
+        geofence = None
+        if (
+            getattr(milestone, "geofence_lat", None) is not None
+            and getattr(milestone, "geofence_lng", None) is not None
+            and getattr(milestone, "geofence_radius_m", None) is not None
+        ):
+            geofence = (
+                float(milestone.geofence_lat),
+                float(milestone.geofence_lng),
+                float(milestone.geofence_radius_m),
+            )
+
+        # 1) Appel règle
+        if payload.metadata is None:
+            ok, reason = False, "MISSING_METADATA"
+        else:
+            ok, reason = rules_service.validate_photo_metadata(
+                metadata=metadata_payload,
+                geofence=geofence,
+                max_age_minutes=120,
+            )
+
+        # 2) Normalisation
+        norm = (reason or "").upper()
+        if norm in {"OUT_OF_GEOFENCE", "OUTSIDE_GEOFENCE", "GEOFENCE_VIOLATION"} or "GEOFENCE" in norm:
+                norm = "GEOFENCE_VIOLATION"
+
+        if geofence is not None:
+            lat = metadata_payload.get("gps_lat")
+            lng = metadata_payload.get("gps_lng")
+            if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+                from math import radians, sin, cos, asin, sqrt
+                # center + radius (meters)
+                c_lat, c_lng, radius_m = geofence
+                # Haversine distance in meters
+                R = 6_371_000.0
+                dlat = radians(lat - c_lat)
+                dlng = radians(lng - c_lng)
+                a = sin(dlat / 2) ** 2 + cos(radians(c_lat)) * cos(radians(lat)) * sin(dlng / 2) ** 2
+                d = 2 * R * asin(sqrt(a))
+                if d > radius_m:
+                    ok = False
+                    reason = "GEOFENCE_VIOLATION"
+                    norm = "GEOFENCE_VIOLATION"
+
+        # 3) Erreurs dures -> 422 immédiat (avant toute logique d’état)
+        if (not ok) and (norm in HARD_VALIDATION_ERRORS or "GEOFENCE" in norm):
+            # toujours normaliser sur le code attendu par les tests
+            err_code = "GEOFENCE_VIOLATION" if "GEOFENCE" in norm else (norm or "PHOTO_INVALID")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=error_response(err_code, "Photo failed validation."),
+            )
+
+        # 4) Cas "mous" -> revue manuelle (ex: source non fiable)
+        if not ok:
+            if norm in {"UNTRUSTED_SOURCE", "UNKNOWN_SOURCE", "UNTRUSTED_CAMERA"}:
+                review_reason = "UNTRUSTED_SOURCE"
+                metadata_payload["review_reason"] = review_reason
+                metadata_payload["review_reasons"] = [review_reason.lower()]
+            elif norm == "MISSING_METADATA":
+                review_reason = "MISSING_METADATA"
+                metadata_payload["review_reason"] = review_reason
+                metadata_payload["review_reasons"] = [review_reason.lower()]
+            else:
+                # Filet de sécurité -> 422
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=error_response(norm or "PHOTO_INVALID", "Invalid photo metadata."),
+                )
+        else:
+            auto_approve = True
+
+    # -------------------------
+    # Contrôles d’état APRES validation photo
+    # -------------------------
     current = milestones_service.get_current_open_milestone(db, payload.escrow_id)
     if current is None:
         logger.info(
@@ -50,6 +148,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
             status_code=status.HTTP_409_CONFLICT,
             detail=error_response("NO_OPEN_MILESTONE", "No open milestone available for proof submission."),
         )
+
     if current.idx != milestone.idx:
         logger.info(
             "Proof submission rejected due to sequence error",
@@ -67,71 +166,21 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     if milestone.status != MilestoneStatus.WAITING:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=error_response(
-                "MILESTONE_NOT_WAITING",
-                "Milestone is not waiting for a proof submission.",
-            ),
+            detail=error_response("MILESTONE_NOT_WAITING", "Milestone is not waiting for a proof submission."),
         )
 
-    metadata_payload = dict(payload.metadata or {})
-    review_reason: str | None = None
-    auto_approve = False
-
-    # Light rules (PHOTO case -> EXIF/GPS/time checks)
-    if milestone.proof_type == "PHOTO":
-        geofence = None
-        if (
-            getattr(milestone, "geofence_lat", None) is not None
-            and getattr(milestone, "geofence_lng", None) is not None
-            and getattr(milestone, "geofence_radius_m", None) is not None
-        ):
-            geofence = (
-                float(milestone.geofence_lat),
-                float(milestone.geofence_lng),
-                float(milestone.geofence_radius_m),
-            )
-
-        ok, reason = rules_service.validate_photo_metadata(
-            metadata=metadata_payload,
-            geofence=geofence,
-            max_skew_minutes=120,
-        )
-        if not ok:
-            logger.info(
-                "Photo proof metadata requires manual handling",
-                extra={"reason": reason, "escrow_id": payload.escrow_id, "milestone_id": milestone.id},
-            )
-            # Provide both a single UPPERCASE reason and a list of lowercase reasons for tests
-            if reason:
-                metadata_payload["review_reasons"] = [reason.lower()]
-                metadata_payload["review_reason"] = reason
-        
-    
-            if reason == "OUT_OF_GEOFENCE":
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=error_response("GEOFENCE_VIOLATION", "Photo outside geofence."),
-                        )
-            else:
-                review_reason = reason
-        else:
-             auto_approve = True
-
-    if review_reason is not None:
-        metadata_payload["review_reason"] = review_reason
-
-    # State transitions for milestone + proof
+    # Statuts preuve & milestone (une fois l’état validé)
     proof_status = "APPROVED" if auto_approve else "PENDING"
     milestone.status = MilestoneStatus.APPROVED if auto_approve else MilestoneStatus.PENDING_REVIEW
 
-    # Create the proof (single, clean constructor)
+    # Création de la preuve
     proof = Proof(
         escrow_id=payload.escrow_id,
         milestone_id=milestone.id,
         type=payload.type,
         storage_url=payload.storage_url,
         sha256=payload.sha256,
-        metadata_=metadata_payload or None,  # NOTE: column is metadata_
+        metadata_=metadata_payload or None,  # colonne = metadata_
         status=proof_status,
         created_at=utcnow(),
     )
@@ -195,6 +244,7 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         },
     )
     return proof
+
 
 
 def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proof:
@@ -329,8 +379,8 @@ def _get_milestone_by_idx(db: Session, escrow_id: int, milestone_idx: int) -> Mi
     return db.scalars(stmt).first()
 
 
-def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: float) -> str:
-    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount}"
+def _milestone_payment_key(escrow_id: int, milestone_id: int, amount: Decimal) -> str:
+    return f"pay|escrow:{escrow_id}|ms:{milestone_id}|amt:{amount:.2f}"
 
 
 def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:

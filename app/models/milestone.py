@@ -1,4 +1,5 @@
 """Milestone model definitions."""
+from decimal import Decimal
 from enum import Enum as PyEnum
 
 from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
@@ -35,7 +36,7 @@ class Milestone(Base):
     escrow_id: Mapped[int] = mapped_column(ForeignKey("escrow_agreements.id"), nullable=False, index=True)
     idx: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str] = mapped_column(String(200), nullable=False)
-    amount: Mapped[float] = mapped_column(Numeric(18, 2, asdecimal=False), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     proof_type: Mapped[str] = mapped_column(String(50), nullable=False)
     validator: Mapped[str] = mapped_column(String(50), nullable=False, default="SENDER")
     geofence_lat: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)

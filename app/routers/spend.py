@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, Header, status , HTTPException
+"""Spending and usage endpoints."""
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, Header, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.security import require_api_key
 from app.schemas.spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -13,6 +15,7 @@ from app.schemas.spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
+from app.security import require_api_key
 from app.services import spend as spend_service
 from app.services import usage as usage_service
 
@@ -47,8 +50,8 @@ class AddPayeeIn(BaseModel):
     escrow_id: int
     payee_ref: str = Field(..., min_length=2, max_length=120)
     label: str = Field(..., min_length=2, max_length=200)
-    daily_limit: float | None = None
-    total_limit: float | None = None
+    daily_limit: Decimal | None = None
+    total_limit: Decimal | None = None
 
 
 @router.post("/allowed", status_code=status.HTTP_201_CREATED)
@@ -74,7 +77,7 @@ def add_allowed_payee(payload: AddPayeeIn, db: Session = Depends(get_db)):
 class SpendIn(BaseModel):
     escrow_id: int
     payee_ref: str
-    amount: float
+    amount: Decimal
     note: str | None = None
 
 

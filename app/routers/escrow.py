@@ -1,4 +1,4 @@
-"""Escrow endpoints."""
+"""Escrow agreement endpoints."""
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 

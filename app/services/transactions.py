@@ -49,7 +49,7 @@ def create_transaction(db: Session, payload: TransactionCreate, *, idempotency_k
             payload={
                 "sender_id": payload.sender_id,
                 "attempted_receiver_id": payload.receiver_id,
-                "amount": payload.amount,
+                "amount": str(payload.amount),
             },
         )
         logger.warning("Unauthorized transfer attempt", extra=payload.model_dump())
@@ -75,7 +75,7 @@ def create_transaction(db: Session, payload: TransactionCreate, *, idempotency_k
             action="CREATE_TRANSACTION",
             entity="Transaction",
             entity_id=transaction.id,
-            data_json=payload.model_dump(),
+            data_json=payload.model_dump(mode="json"),
             at=utcnow(),
         )
         db.add(audit)
