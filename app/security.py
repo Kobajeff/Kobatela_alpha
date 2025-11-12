@@ -1,21 +1,47 @@
-"""Simple API key security dependency."""
+"""Security dependencies for API key validation and scope enforcement."""
+from __future__ import annotations
+
 from fastapi import Depends, Header, HTTPException, status
+from sqlalchemy.orm import Session
 
-from .config import get_settings
+from app.db import get_db
+from app.models.api_key import ApiScope
+from app.utils.apikey import find_valid_key
+from app.utils.errors import error_response
 
 
-def get_api_key_header(authorization: str | None = Header(default=None)) -> str:
-    """Extract and validate the bearer API key from Authorization header."""
+async def require_api_key(
+    authorization: str = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Validate the Authorization header and return the associated API key."""
 
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"error": {"code": "UNAUTHORIZED", "message": "Missing or invalid Authorization header."}})
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response("UNAUTHORIZED", "Missing Bearer token"),
+        )
 
-    return authorization.removeprefix("Bearer ").strip()
+    token = authorization.split(" ", 1)[1].strip()
+    key = find_valid_key(db, token)
+    if not key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response("UNAUTHORIZED", "Invalid or expired API key"),
+        )
+    return key
 
 
-def require_api_key(api_key: str = Depends(get_api_key_header)) -> None:
-    """Ensure the provided API key matches settings."""
+def require_scope(allowed: set[ApiScope]):
+    """Return a dependency enforcing that the API key has one of the allowed scopes."""
 
-    settings = get_settings()
-    if api_key != settings.api_key:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail={"error": {"code": "UNAUTHORIZED", "message": "Invalid API key."}})
+    async def _dep(key=Depends(require_api_key)):
+        if key == "legacy":
+            return
+        if key.scope not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=error_response("FORBIDDEN", "Scope not allowed"),
+            )
+
+    return _dep

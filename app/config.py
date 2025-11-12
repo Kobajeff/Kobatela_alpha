@@ -1,7 +1,7 @@
 """Application configuration settings."""
 from functools import lru_cache
 
-from pydantic import BaseModel, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,8 +10,19 @@ class Settings(BaseSettings):
 
     app_env: str = "dev"
     database_url: str = "sqlite:///kobatella.db"
-    api_key: str = "dev-secret-key"
     psp_webhook_secret: str | None = None
+    SECRET_KEY: str = "change-me"
+    DEV_API_KEY: str | None = Field(
+        default="koba_jeff",
+        validation_alias=AliasChoices("DEV_API_KEY", "API_KEY"),
+    )
+    CORS_ALLOW_ORIGINS: list[str] = [
+        "https://kobatela.com",
+        "https://app.kobatela.com",
+        "http://localhost:3000",
+    ]
+    SENTRY_DSN: str | None = None
+    PROMETHEUS_ENABLED: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", env_file_encoding="utf-8")
 
@@ -31,8 +42,11 @@ class AppInfo(BaseModel):
     version: str = "0.1.0"
 
 
+settings = Settings()
+
+
 @lru_cache
 def get_settings() -> Settings:
     """Return cached application settings."""
 
-    return Settings()
+    return settings
