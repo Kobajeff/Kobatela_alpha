@@ -2,7 +2,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.certified import CertificationLevel
 from app.models.transaction import TransactionStatus
@@ -36,3 +36,12 @@ class AllowlistCreate(BaseModel):
 class CertificationCreate(BaseModel):
     user_id: int
     level: CertificationLevel
+
+    @field_validator("level", mode="before")
+    @classmethod
+    def _normalize_level(cls, value: str | CertificationLevel) -> CertificationLevel | str:
+        """Allow case-insensitive enum values from clients."""
+
+        if isinstance(value, str):
+            return value.upper()
+        return value
