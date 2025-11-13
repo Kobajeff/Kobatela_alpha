@@ -31,18 +31,12 @@ def _extract_key(
 def require_api_key(
     db: Session = Depends(get_db),
     token: str | None = Depends(_extract_key),
-):
-    """
-    Valide la clé API.
-    - Rejette la DEV_API_KEY si DEV_API_KEY_ALLOWED=False.
-    - Si DEV_API_KEY_ALLOWED=True et token == DEV_API_KEY → renvoie le sentinelle "legacy".
-    - Sinon, valide via find_valid_key(prefix+raw) et retourne la ligne ApiKey.
-    - Met à jour last_used_at et crée un AuditLog sur usage.
-    """
+) -> ApiKey:
+    """Validate API key tokens and return the corresponding row."""
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_response("UNAUTHORIZED", "Missing API key"),
+            detail=error_response("NO_API_KEY", "API key required."),
         )
 
     # Gestion de la clé legacy (mode dev)
@@ -50,7 +44,7 @@ def require_api_key(
         if not DEV_API_KEY_ALLOWED:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=error_response("LEGACY_KEY_FORBIDDEN", "Legacy dev key is disabled."),
+                detail=error_response("LEGACY_KEY_FORBIDDEN", "Legacy dev key disabled."),
             )
         now = datetime.now(UTC)
         db.add(
@@ -78,8 +72,39 @@ def require_api_key(
         return fake
 
     # Clés normales (prefix + hash)
-    key: ApiKey | None = find_valid_key(db, token)
-    if not key or not key.is_active:
+    key = find_valid_key(db, token)
+    if key == "legacy":
+        # Cas non attendu car déjà géré ci-dessus mais on garde par prudence.
+        if not DEV_API_KEY_ALLOWED:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_response("LEGACY_KEY_FORBIDDEN", "Legacy dev key disabled."),
+            )
+        now = datetime.now(UTC)
+        db.add(
+            AuditLog(
+                actor="legacy-apikey",
+                action="LEGACY_API_KEY_USED",
+                entity="ApiKey",
+                entity_id=0,
+                data_json={"env": ENV},
+                at=now,
+            )
+        )
+        db.commit()
+        return ApiKey(
+            id=0,
+            name="__legacy__",
+            prefix="legacy",
+            key_hash="legacy",
+            scope=ApiScope.admin,
+            is_active=True,
+            created_at=now,
+            expires_at=None,
+            last_used_at=now,
+        )
+
+    if not isinstance(key, ApiKey) or not key.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=error_response("UNAUTHORIZED", "Invalid or expired API key"),

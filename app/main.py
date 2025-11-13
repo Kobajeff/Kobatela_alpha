@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
     db.init_engine()  # sync, idempotent
     # IMPORTANT : créer les tables ici quand on utilise lifespan
     db.create_all()
+    # NOTE: In multi-replica deployments, enable SCHEDULER_ENABLED=true on ONE runner only (others=false).
+    # For 1.0.0 consider external cron/worker or APScheduler with a distributed job store/lock.
     # Lancer le scheduler uniquement sur l'instance désignée (cf. déploiement multi-runner).
     if SCHEDULER_ENABLED:
         global scheduler

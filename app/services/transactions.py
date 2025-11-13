@@ -28,7 +28,7 @@ def _audit(
     actor: str,
     action: str,
     entity: str,
-    entity_id: int,
+    entity_id: int | None,
     data: dict | None = None,
 ) -> None:
     db.add(
@@ -60,7 +60,7 @@ def add_to_allowlist(db: Session, payload: AllowlistCreate) -> dict[str, str]:
         db,
         actor="admin",
         action="ALLOWLIST_ADD",
-        entity="Allowlist",
+        entity="AllowedRecipient",
         entity_id=entry.id,
         data={
             "owner_id": payload.owner_id,
@@ -97,7 +97,7 @@ def add_certification(db: Session, payload: CertificationCreate) -> dict[str, st
     _audit(
         db,
         actor="admin",
-        action="ACCOUNT_CERTIFIED",
+        action="CERTIFICATION_UPDATE",
         entity="CertifiedAccount",
         entity_id=entity_id,
         data={"account_id": payload.user_id, "level": payload.level},
