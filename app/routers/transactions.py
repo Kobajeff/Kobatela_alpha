@@ -1,6 +1,6 @@
-"""Transaction and authorization endpoints."""
-"""Transaction and authorization endpoints."""
 from __future__ import annotations
+
+"""Transaction and authorization endpoints."""
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
