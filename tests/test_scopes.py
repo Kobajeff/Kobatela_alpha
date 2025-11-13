@@ -18,3 +18,5 @@ async def test_admin_can_revoke_key(client, admin_headers, make_api_key):
     api_key = make_api_key(name=f"revokable-{uuid4().hex}", key=key_token)
     response = await client.delete(f"/apikeys/{api_key.id}", headers=admin_headers)
     assert response.status_code in (204, 404)
+
+
