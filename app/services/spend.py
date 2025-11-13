@@ -19,6 +19,7 @@ from app.schemas.spend import (
 )
 from app.services.mandates import audit_mandate_event
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import log_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -100,13 +101,24 @@ def create_category(db: Session, payload: SpendCategoryCreate) -> SpendCategory:
     category = SpendCategory(code=payload.code, label=payload.label)
     db.add(category)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_response("CATEGORY_EXISTS", "Spend category already exists."),
         )
+
+    log_audit(
+        db,
+        actor="admin",
+        action="SPEND_CATEGORY_CREATED",
+        entity="SpendCategory",
+        entity_id=category.id,
+        data={"code": category.code, "label": category.label},
+    )
+
+    db.commit()
     db.refresh(category)
     logger.info("Spend category created", extra={"category_id": category.id, "code": category.code})
     return category
@@ -127,13 +139,28 @@ def create_merchant(db: Session, payload: MerchantCreate) -> Merchant:
     merchant = Merchant(name=payload.name, category=category, is_certified=payload.is_certified)
     db.add(merchant)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_response("MERCHANT_EXISTS", "Merchant already exists."),
         )
+
+    log_audit(
+        db,
+        actor="admin",
+        action="SPEND_MERCHANT_CREATED",
+        entity="Merchant",
+        entity_id=merchant.id,
+        data={
+            "name": merchant.name,
+            "category_id": merchant.category_id,
+            "is_certified": merchant.is_certified,
+        },
+    )
+
+    db.commit()
     db.refresh(merchant)
     logger.info("Merchant created", extra={"merchant_id": merchant.id})
     return merchant
@@ -175,13 +202,28 @@ def allow_usage(db: Session, payload: AllowedUsageCreate) -> dict[str, str]:
     )
     db.add(usage)
     try:
-        db.commit()
-        logger.info("Usage allowed", extra={"owner_id": payload.owner_id})
-        return {"status": "added"}
+        db.flush()
     except IntegrityError:
         db.rollback()
         logger.info("Usage already allowed", extra={"owner_id": payload.owner_id})
         return {"status": "exists"}
+
+    log_audit(
+        db,
+        actor="admin",
+        action="SPEND_ALLOW_CREATED",
+        entity="AllowedUsage",
+        entity_id=usage.id,
+        data={
+            "owner_id": payload.owner_id,
+            "merchant_id": payload.merchant_id,
+            "category_id": payload.category_id,
+        },
+    )
+
+    db.commit()
+    logger.info("Usage allowed", extra={"owner_id": payload.owner_id})
+    return {"status": "added"}
 
 
 def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: str | None) -> Purchase:

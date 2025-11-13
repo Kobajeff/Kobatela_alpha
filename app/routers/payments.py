@@ -4,13 +4,14 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.payment import PaymentRead
+from app.models.api_key import ApiScope
 from app.security import require_scope
 from app.services import payments as payments_service
 
 router = APIRouter(
     prefix="/payments",
     tags=["payments"],
-    dependencies=[Depends(require_scope("sender"))],
+    dependencies=[Depends(require_scope({ApiScope.sender}))],
 )
 
 
