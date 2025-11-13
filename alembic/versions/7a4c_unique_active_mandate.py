@@ -4,7 +4,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "7a4c_unique_active_mandate"
-down_revision = "8b7e_add_api_keys"
+down_revision = "7a3b_api_keys_table"
 branch_labels = None
 depends_on = None
 

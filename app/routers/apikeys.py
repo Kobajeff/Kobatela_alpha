@@ -1,6 +1,7 @@
+# app/routers/apikeys.py
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, field_validator
@@ -12,14 +13,18 @@ from app.models.api_key import ApiKey, ApiScope
 from app.models.audit import AuditLog
 from app.security import require_scope
 from app.utils.errors import error_response
+from app.utils.apikey import gen_key
 
 router = APIRouter(prefix="/apikeys", tags=["apikeys"])
 
 
-class ApiKeyCreate(BaseModel):
+# ------ Schemas ------
+
+class CreateKeyIn(BaseModel):
+    """Payload d'entrée pour créer une nouvelle clé (pas de champ 'key' ici)."""
     name: str
-    key: str
     scope: ApiScope
+    days_valid: int | None = 90
 
     @field_validator("name")
     @classmethod
@@ -28,67 +33,90 @@ class ApiKeyCreate(BaseModel):
             raise ValueError("name cannot be blank")
         return value.strip()
 
-    @field_validator("key")
-    @classmethod
-    def key_not_blank(cls, value: str) -> str:
-        if not value or not value.strip():
-            raise ValueError("key cannot be blank")
-        return value.strip()
+
+class ApiKeyCreateOut(BaseModel):
+    """Réponse du POST /apikeys : on renvoie la clé brute UNE SEULE fois."""
+    id: int
+    name: str
+    scope: ApiScope
+    key: str
+    expires_at: datetime | None
 
 
 class ApiKeyRead(BaseModel):
+    """Réponse des GET (jamais la clé)."""
     id: int
     name: str
-    key: str
     scope: ApiScope
     is_active: bool
+    created_at: datetime
+    expires_at: datetime | None
     last_used_at: datetime | None
 
     class Config:
         from_attributes = True
 
 
+# ------ Routes ------
+
 @router.post(
     "",
-    response_model=ApiKeyRead,
+    response_model=ApiKeyCreateOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope("admin"))],
+    dependencies=[Depends(require_scope({ApiScope.admin}))],
 )
-def create_apikey(payload: ApiKeyCreate, db: Session = Depends(get_db)) -> ApiKey:
+def create_api_key(payload: CreateKeyIn, db: Session = Depends(get_db)) -> ApiKeyCreateOut:
+    """Crée une clé API côté serveur et renvoie la valeur brute une seule fois."""
+    raw, prefix, key_hash = gen_key()
+    now = datetime.now(UTC)
+    expires_at = now + timedelta(days=payload.days_valid) if payload.days_valid else None
+
     row = ApiKey(
         name=payload.name,
-        key=payload.key,
+        prefix=prefix,
+        key_hash=key_hash,
         scope=payload.scope,
+        created_at=now,
+        expires_at=expires_at,
         is_active=True,
     )
     db.add(row)
     try:
         db.commit()
-    except IntegrityError as exc:  # pragma: no cover - executed in tests when duplicates appear
+    except IntegrityError as exc:
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_response("APIKEY_EXISTS", "Key or name already exists."),
+            detail=error_response("APIKEY_EXISTS", "Key name already exists."),
         ) from exc
     db.refresh(row)
 
-    audit = AuditLog(
-        actor="admin",
-        action="CREATE_API_KEY",
-        entity="ApiKey",
-        entity_id=row.id,
-        data_json={"name": row.name, "scope": row.scope.value},
-        at=datetime.now(UTC),
+    # Audit: création de clé
+    db.add(
+        AuditLog(
+            actor="admin",
+            action="CREATE_API_KEY",
+            entity="ApiKey",
+            entity_id=row.id,
+            data_json={"name": row.name, "scope": row.scope.value},
+            at=now,
+        )
     )
-    db.add(audit)
     db.commit()
-    return row
+
+    return ApiKeyCreateOut(
+        id=row.id,
+        name=row.name,
+        scope=row.scope,
+        key=raw,               # ne sera plus jamais renvoyée
+        expires_at=row.expires_at,
+    )
 
 
 @router.get(
     "/{api_key_id}",
     response_model=ApiKeyRead,
-    dependencies=[Depends(require_scope("admin"))],
+    dependencies=[Depends(require_scope({ApiScope.admin}))],
 )
 def get_apikey(api_key_id: int, db: Session = Depends(get_db)) -> ApiKey:
     row = db.get(ApiKey, api_key_id)
@@ -104,9 +132,10 @@ def get_apikey(api_key_id: int, db: Session = Depends(get_db)) -> ApiKey:
     "/{api_key_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     response_class=Response,
-    dependencies=[Depends(require_scope("admin"))],
+    dependencies=[Depends(require_scope({ApiScope.admin}))],
 )
 def revoke_apikey(api_key_id: int, db: Session = Depends(get_db)) -> Response:
+    now = datetime.now(UTC)
     row = db.get(ApiKey, api_key_id)
     if not row:
         raise HTTPException(
@@ -122,7 +151,7 @@ def revoke_apikey(api_key_id: int, db: Session = Depends(get_db)) -> Response:
                 entity="ApiKey",
                 entity_id=api_key_id,
                 data_json={},
-                at=datetime.now(UTC),
+                at=now,
             )
         )
         db.commit()
@@ -137,8 +166,9 @@ def revoke_apikey(api_key_id: int, db: Session = Depends(get_db)) -> Response:
             entity="ApiKey",
             entity_id=api_key_id,
             data_json={"name": row.name},
-            at=datetime.now(UTC),
+            at=now,
         )
     )
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
