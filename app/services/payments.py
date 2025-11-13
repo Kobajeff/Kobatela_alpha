@@ -183,6 +183,7 @@ def execute_payout(
         db.refresh(payment)
         if milestone:
             db.refresh(milestone)
+        _handle_post_payment(db, payment)
         logger.info(
             "Payout executed",
             extra={"payment_id": payment.id, "escrow_id": escrow.id, "status": payment.status.value},
@@ -240,7 +241,7 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
                 kind="PAYMENT_SENT",
                 data_json={
                     "payment_id": payment.id,
-                    "amount": payment.amount,
+                    "amount": str(payment.amount),
                     "milestone_id": milestone.id if milestone else None,
                     "psp_ref": payment.psp_ref,
                 },
@@ -253,7 +254,10 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
                 action="EXECUTE_PAYOUT",
                 entity="Payment",
                 entity_id=payment.id,
-                data_json={"idempotency_key": payment.idempotency_key, "amount": payment.amount},
+                data_json={
+                    "idempotency_key": payment.idempotency_key,
+                    "amount": str(payment.amount),
+                },
                 at=utcnow(),
             )
         )
@@ -275,7 +279,17 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
         ) from exc
 
     db.refresh(payment)
+    _handle_post_payment(db, payment)
     return executed
+
+
+def _handle_post_payment(db: Session, payment: Payment) -> None:
+    """Synchronise escrow state once a payment has been persisted."""
+
+    if payment is None or payment.escrow_id is None:
+        return
+
+    _finalize_escrow_if_paid(db, payment.escrow_id)
 
 def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
     total = int(db.scalar(

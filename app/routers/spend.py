@@ -1,11 +1,16 @@
 """Spending and usage endpoints."""
+from __future__ import annotations
+
 from decimal import Decimal
+import uuid
 
 from fastapi import APIRouter, Depends, Header, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.api_key import ApiScope
+from app.security import require_api_key, require_scope
 from app.schemas.spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -15,8 +20,6 @@ from app.schemas.spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
-from app.models.api_key import ApiScope
-from app.security import require_scope
 from app.services import spend as spend_service
 from app.services import usage as usage_service
 
@@ -27,22 +30,41 @@ router = APIRouter(
 )
 
 
-@router.post("/categories", response_model=SpendCategoryRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/categories",
+    response_model=SpendCategoryRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def create_category(payload: SpendCategoryCreate, db: Session = Depends(get_db)):
     return spend_service.create_category(db, payload)
 
 
-@router.post("/merchants", response_model=MerchantRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/merchants",
+    response_model=MerchantRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def create_merchant(payload: MerchantCreate, db: Session = Depends(get_db)):
     return spend_service.create_merchant(db, payload)
 
 
-@router.post("/allow", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/allow",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def allow_usage(payload: AllowedUsageCreate, db: Session = Depends(get_db)):
     return spend_service.allow_usage(db, payload)
 
 
-@router.post("/purchases", response_model=PurchaseRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/purchases",
+    response_model=PurchaseRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def create_purchase(
     payload: PurchaseCreate,
     db: Session = Depends(get_db),
@@ -59,7 +81,11 @@ class AddPayeeIn(BaseModel):
     total_limit: Decimal | None = None
 
 
-@router.post("/allowed", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/allowed",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def add_allowed_payee(payload: AddPayeeIn, db: Session = Depends(get_db)):
     payee = usage_service.add_allowed_payee(
         db,
@@ -86,13 +112,17 @@ class SpendIn(BaseModel):
     note: str | None = None
 
 
-@router.post("", status_code=status.HTTP_200_OK)
+@router.post(
+    "",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def spend(
     payload: SpendIn,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    key = idempotency_key or f"spend:{payload.escrow_id}:{payload.payee_ref}:{payload.amount:.2f}"
+    key = idempotency_key or f"auto-{uuid.uuid4().hex}"
     payment = usage_service.spend_to_allowed_payee(
         db,
         escrow_id=payload.escrow_id,

@@ -1,8 +1,11 @@
 """Transaction and authorization endpoints."""
+from __future__ import annotations
+
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.api_key import ApiScope
 from app.models.transaction import Transaction
 from app.schemas.transaction import (
     AllowlistCreate,
@@ -10,28 +13,41 @@ from app.schemas.transaction import (
     TransactionCreate,
     TransactionRead,
 )
-from app.security import require_api_key
+from app.security import require_api_key, require_scope
 from app.services import transactions as transactions_service
 from app.utils.errors import error_response
 
-router = APIRouter(tags=["transactions"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="", tags=["transactions"])
 
 
-@router.post("/allowlist", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/allowlist",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key), Depends(require_scope({ApiScope.admin}))],
+)
 def add_to_allowlist(payload: AllowlistCreate, db: Session = Depends(get_db)) -> dict[str, str]:
     """Add a recipient to the sender's allowlist."""
 
     return transactions_service.add_to_allowlist(db, payload)
 
 
-@router.post("/certified", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/certified",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key), Depends(require_scope({ApiScope.admin}))],
+)
 def add_certification(payload: CertificationCreate, db: Session = Depends(get_db)) -> dict[str, str]:
     """Mark a user as certified."""
 
     return transactions_service.add_certification(db, payload)
 
 
-@router.post("/transactions", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/transactions",
+    response_model=TransactionRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key), Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def post_transaction(
     payload: TransactionCreate,
     db: Session = Depends(get_db),
@@ -44,7 +60,11 @@ def post_transaction(
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionRead)
-def get_transaction(transaction_id: int, db: Session = Depends(get_db)) -> Transaction:
+def get_transaction(
+    transaction_id: int,
+    db: Session = Depends(get_db),
+    _key=Depends(require_api_key),
+) -> Transaction:
     """Retrieve transaction details."""
 
     transaction = db.get(Transaction, transaction_id)
