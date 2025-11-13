@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
