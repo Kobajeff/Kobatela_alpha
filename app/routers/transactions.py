@@ -73,10 +73,17 @@ def post_transaction(
             ),
         )
 
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /transactions.",
+            ),
+        )
+
     transaction, _created = transactions_service.create_transaction(
-        db,
-        payload,
-        idempotency_key=idempotency_key,
+        db, payload, idempotency_key=idempotency_key
     )
     return transaction
 
