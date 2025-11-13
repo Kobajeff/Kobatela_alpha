@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import uuid
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
@@ -26,7 +27,7 @@ from app.utils.errors import error_response
 router = APIRouter(
     prefix="/spend",
     tags=["spend"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_scope({ApiScope.sender}))],
 )
 
 
