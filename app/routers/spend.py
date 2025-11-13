@@ -26,7 +26,7 @@ from app.services import usage as usage_service
 router = APIRouter(
     prefix="/spend",
     tags=["spend"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_scope({ApiScope.sender}))],
 )
 
 
