@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
@@ -65,6 +65,29 @@ def _ensure_category(db: Session, category_id: int) -> None:
         )
 
 
+def ensure_no_active_duplicate(db: Session, sender_id: int, beneficiary_id: int, currency: str) -> None:
+    """Ensure there is no other active mandate for the provided pair."""
+
+    exists = db.execute(
+        select(UsageMandate.id).where(
+            and_(
+                UsageMandate.sender_id == sender_id,
+                UsageMandate.beneficiary_id == beneficiary_id,
+                UsageMandate.currency == currency,
+                UsageMandate.status == UsageMandateStatus.ACTIVE,
+            )
+        ).limit(1)
+    ).scalar_one_or_none()
+    if exists:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response(
+                "ACTIVE_MANDATE_EXISTS",
+                "An active mandate already exists for this pair and currency.",
+            ),
+        )
+
+
 def create_mandate(db: Session, payload: UsageMandateCreate) -> UsageMandate:
     """Create a new usage mandate tying a sender to a beneficiary."""
 
@@ -83,6 +106,13 @@ def create_mandate(db: Session, payload: UsageMandateCreate) -> UsageMandate:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_response("MANDATE_EXPIRES_IN_PAST", "Expiration date must be in the future."),
         )
+
+    ensure_no_active_duplicate(
+        db,
+        sender_id=payload.sender_id,
+        beneficiary_id=payload.beneficiary_id,
+        currency=payload.currency,
+    )
 
     mandate = UsageMandate(
         sender_id=payload.sender_id,

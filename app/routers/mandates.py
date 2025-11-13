@@ -6,10 +6,14 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.mandates import UsageMandateCreate, UsageMandateRead
-from app.security import require_api_key
+from app.security import require_scope
 from app.services import mandates as mandate_service
 
-router = APIRouter(prefix="/mandates", tags=["mandates"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/mandates",
+    tags=["mandates"],
+    dependencies=[Depends(require_scope("sender"))],
+)
 
 
 @router.post("", response_model=UsageMandateRead, status_code=status.HTTP_201_CREATED)

@@ -4,11 +4,15 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.proof import ProofCreate, ProofDecision, ProofRead
-from app.security import require_api_key
+from app.security import require_scope
 from app.services import proofs as proofs_service
 from app.utils.errors import error_response
 
-router = APIRouter(prefix="/proofs", tags=["proofs"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/proofs",
+    tags=["proofs"],
+    dependencies=[Depends(require_scope("sender"))],
+)
 
 
 @router.post("", response_model=ProofRead, status_code=status.HTTP_201_CREATED)
