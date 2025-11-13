@@ -73,6 +73,17 @@ async def test_spend_with_idempotency_key_is_idempotent(client, sender_headers, 
 
 @pytest.mark.anyio
 async def test_spend_missing_idempotency_key_is_rejected(client, sender_headers):
-    resp = await client.post("/spend", json=payload, headers=sender_headers)  # sans Idempotency-Key
+    # Payload minimal valide côté schéma, contenu factice
+    payload = {
+        "escrow_id": 123,
+        "payee_ref": "dummy-merchant",
+        "amount": "10.00",
+        "note": "missing idempotency key",
+    }
+
+    # Pas de header "Idempotency-Key"
+    resp = await client.post("/spend", json=payload, headers=sender_headers)
+
     assert resp.status_code == 400
-    assert resp.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
+    body = resp.json()
+    assert body["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
