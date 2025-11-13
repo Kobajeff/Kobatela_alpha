@@ -27,6 +27,7 @@ router = APIRouter(
 @router.post(
     "/allowlist",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key), Depends(require_scope({ApiScope.admin}))],
 )
 def add_to_allowlist(payload: AllowlistCreate, db: Session = Depends(get_db)) -> dict[str, str]:
     """Add a recipient to the sender's allowlist."""
@@ -37,6 +38,7 @@ def add_to_allowlist(payload: AllowlistCreate, db: Session = Depends(get_db)) ->
 @router.post(
     "/certified",
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key), Depends(require_scope({ApiScope.admin}))],
 )
 def add_certification(payload: CertificationCreate, db: Session = Depends(get_db)) -> dict[str, str]:
     """Mark a user as certified."""
@@ -48,6 +50,7 @@ def add_certification(payload: CertificationCreate, db: Session = Depends(get_db
     "/transactions",
     response_model=TransactionRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_api_key), Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
 )
 def post_transaction(
     payload: TransactionCreate,
@@ -75,6 +78,7 @@ def post_transaction(
 def get_transaction(
     transaction_id: int,
     db: Session = Depends(get_db),
+    _key=Depends(require_api_key),
 ) -> Transaction:
     """Retrieve transaction details."""
 

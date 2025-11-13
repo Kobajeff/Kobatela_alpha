@@ -183,6 +183,7 @@ def execute_payout(
         db.refresh(payment)
         if milestone:
             db.refresh(milestone)
+        _handle_post_payment(db, payment)
         logger.info(
             "Payout executed",
             extra={"payment_id": payment.id, "escrow_id": escrow.id, "status": payment.status.value},
