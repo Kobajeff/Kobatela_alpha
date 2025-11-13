@@ -27,7 +27,7 @@ from app.utils.errors import error_response
 router = APIRouter(
     prefix="/spend",
     tags=["spend"],
-    dependencies=[Depends(require_scope({ApiScope.sender}))],
+    dependencies=[Depends(require_api_key)],
 )
 
 
