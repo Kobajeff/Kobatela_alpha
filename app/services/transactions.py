@@ -97,7 +97,7 @@ def add_certification(db: Session, payload: CertificationCreate) -> dict[str, st
     _audit(
         db,
         actor="admin",
-        action="CERTIFICATION_UPDATE",
+        action="ACCOUNT_CERTIFIED",
         entity="CertifiedAccount",
         entity_id=entity_id,
         data={"account_id": payload.user_id, "level": payload.level},
