@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 os.environ.setdefault("DATABASE_URL", "sqlite:///./kobatella_test.db")
 os.environ.setdefault("API_KEY", "test-secret-key")
 os.environ.setdefault("PSP_WEBHOOK_SECRET", "test-psp-secret")
+os.environ.setdefault("KOB_ENV", "dev")
 
 from app.main import app  # noqa: E402
 from app import models  # noqa: E402
@@ -29,6 +30,7 @@ from app.models import (
     UsageMandateStatus,
     User,
 )
+from app.models.api_key import ApiKey, ApiScope
 
 DB_PATH = Path("./kobatella_test.db")
 
@@ -87,6 +89,37 @@ async def client() -> AsyncIterator[AsyncClient]:
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {os.environ['API_KEY']}"}
+
+
+@pytest.fixture
+def make_api_key(db_session: Session) -> Callable[..., ApiKey]:
+    def _factory(
+        *,
+        name: str,
+        key: str,
+        scope: ApiScope = ApiScope.sender,
+        is_active: bool = True,
+    ) -> ApiKey:
+        api_key = ApiKey(name=name, key=key, scope=scope, is_active=is_active)
+        db_session.add(api_key)
+        db_session.flush()
+        return api_key
+
+    return _factory
+
+
+@pytest.fixture
+def sender_headers(make_api_key: Callable[..., ApiKey]) -> dict[str, str]:
+    token = f"sender-{uuid4().hex}"
+    make_api_key(name=f"sender-{uuid4().hex}", key=token, scope=ApiScope.sender)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def admin_headers(make_api_key: Callable[..., ApiKey]) -> dict[str, str]:
+    token = f"admin-{uuid4().hex}"
+    make_api_key(name=f"admin-{uuid4().hex}", key=token, scope=ApiScope.admin)
+    return {"Authorization": f"Bearer {token}"}
 
 @pytest.fixture
 def anyio_backend() -> str:

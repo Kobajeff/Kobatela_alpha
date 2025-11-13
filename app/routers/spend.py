@@ -15,11 +15,15 @@ from app.schemas.spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
-from app.security import require_api_key
+from app.security import require_scope
 from app.services import spend as spend_service
 from app.services import usage as usage_service
 
-router = APIRouter(prefix="/spend", tags=["spend"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/spend",
+    tags=["spend"],
+    dependencies=[Depends(require_scope("sender"))],
+)
 
 
 @router.post("/categories", response_model=SpendCategoryRead, status_code=status.HTTP_201_CREATED)

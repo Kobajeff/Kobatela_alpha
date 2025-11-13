@@ -1,19 +1,43 @@
 """Application configuration settings."""
+from __future__ import annotations
+
+import os
 from functools import lru_cache
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# --- Runtime toggles -----------------------------------------------------
+# Environnement d'exécution: "dev" | "staging" | "prod"
+ENV = os.getenv("KOB_ENV", "dev").lower()
+
+# Clé legacy (uniquement tolérée en DEV)
+DEV_API_KEY = os.getenv("DEV_API_KEY") or os.getenv("API_KEY") or "dev-secret-key"
+DEV_API_KEY_ALLOWED = ENV == "dev"
+
+# Scopes reconnus
+API_SCOPES = {"sender", "support", "admin"}
+
+# Scheduler (optionnel)
+SCHEDULER_ENABLED = os.getenv("KOB_SCHEDULER_ENABLED", "0") in {
+    "1",
+    "true",
+    "yes",
+    "True",
+    "YES",
+}
+SCHEDULER_CRON = os.getenv("KOB_SCHEDULER_CRON", "0 3 * * *")
+
 
 class Settings(BaseSettings):
     """Environment configuration for the Kobatella backend."""
 
-    app_env: str = "dev"
+    app_env: str = ENV
     database_url: str = "sqlite:///kobatella.db"
     psp_webhook_secret: str | None = None
     SECRET_KEY: str = "change-me"
     DEV_API_KEY: str | None = Field(
-        default="koba_jeff",
+        default=DEV_API_KEY,
         validation_alias=AliasChoices("DEV_API_KEY", "API_KEY"),
     )
     CORS_ALLOW_ORIGINS: list[str] = [
@@ -24,7 +48,9 @@ class Settings(BaseSettings):
     SENTRY_DSN: str | None = None
     PROMETHEUS_ENABLED: bool = True
 
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="", env_file_encoding="utf-8"
+    )
 
     @field_validator("psp_webhook_secret")
     @classmethod
@@ -50,3 +76,17 @@ def get_settings() -> Settings:
     """Return cached application settings."""
 
     return settings
+
+
+__all__ = [
+    "ENV",
+    "DEV_API_KEY",
+    "DEV_API_KEY_ALLOWED",
+    "API_SCOPES",
+    "SCHEDULER_ENABLED",
+    "SCHEDULER_CRON",
+    "Settings",
+    "AppInfo",
+    "settings",
+    "get_settings",
+]
