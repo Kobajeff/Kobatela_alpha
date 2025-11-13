@@ -15,6 +15,7 @@ from app.schemas.spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
+from app.models.api_key import ApiScope
 from app.security import require_scope
 from app.services import spend as spend_service
 from app.services import usage as usage_service
@@ -22,7 +23,7 @@ from app.services import usage as usage_service
 router = APIRouter(
     prefix="/spend",
     tags=["spend"],
-    dependencies=[Depends(require_scope("sender"))],
+    dependencies=[Depends(require_scope({ApiScope.sender}))],
 )
 
 
