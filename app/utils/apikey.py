@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.config import DEV_API_KEY, DEV_API_KEY_ALLOWED, settings
 from app.models.api_key import ApiKey
 
 
@@ -31,7 +31,11 @@ def gen_key(prefix_len: int = 6) -> tuple[str, str, str]:
 def find_valid_key(db: Session, raw_or_dev: str) -> Optional[ApiKey | str]:
     """Return a matching active API key or the legacy token identifier."""
 
-    if settings.DEV_API_KEY and secrets.compare_digest(raw_or_dev, settings.DEV_API_KEY):
+    if (
+        DEV_API_KEY
+        and DEV_API_KEY_ALLOWED
+        and secrets.compare_digest(raw_or_dev, DEV_API_KEY)
+    ):
         return "legacy"
 
     key_hash = hash_key(raw_or_dev)

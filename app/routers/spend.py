@@ -1,11 +1,15 @@
 """Spending and usage endpoints."""
+from __future__ import annotations
+
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.api_key import ApiScope
+from app.security import require_api_key, require_scope
 from app.schemas.spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -15,33 +19,52 @@ from app.schemas.spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
-from app.security import require_scope
 from app.services import spend as spend_service
 from app.services import usage as usage_service
+from app.utils.errors import error_response
 
 router = APIRouter(
     prefix="/spend",
     tags=["spend"],
-    dependencies=[Depends(require_scope("sender"))],
+    dependencies=[Depends(require_api_key)],
 )
 
 
-@router.post("/categories", response_model=SpendCategoryRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/categories",
+    response_model=SpendCategoryRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
+)
 def create_category(payload: SpendCategoryCreate, db: Session = Depends(get_db)):
     return spend_service.create_category(db, payload)
 
 
-@router.post("/merchants", response_model=MerchantRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/merchants",
+    response_model=MerchantRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
+)
 def create_merchant(payload: MerchantCreate, db: Session = Depends(get_db)):
     return spend_service.create_merchant(db, payload)
 
 
-@router.post("/allow", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/allow",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
+)
 def allow_usage(payload: AllowedUsageCreate, db: Session = Depends(get_db)):
     return spend_service.allow_usage(db, payload)
 
 
-@router.post("/purchases", response_model=PurchaseRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/purchases",
+    response_model=PurchaseRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def create_purchase(
     payload: PurchaseCreate,
     db: Session = Depends(get_db),
@@ -58,7 +81,11 @@ class AddPayeeIn(BaseModel):
     total_limit: Decimal | None = None
 
 
-@router.post("/allowed", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/allowed",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def add_allowed_payee(payload: AddPayeeIn, db: Session = Depends(get_db)):
     payee = usage_service.add_allowed_payee(
         db,
@@ -85,19 +112,30 @@ class SpendIn(BaseModel):
     note: str | None = None
 
 
-@router.post("", status_code=status.HTTP_200_OK)
+@router.post(
+    "",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+)
 def spend(
     payload: SpendIn,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    key = idempotency_key or f"spend:{payload.escrow_id}:{payload.payee_ref}:{payload.amount:.2f}"
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /spend.",
+            ),
+        )
     payment = usage_service.spend_to_allowed_payee(
         db,
         escrow_id=payload.escrow_id,
         payee_ref=payload.payee_ref,
         amount=payload.amount,
-        idempotency_key=key,
+        idempotency_key=idempotency_key,
         note=payload.note,
     )
     return {

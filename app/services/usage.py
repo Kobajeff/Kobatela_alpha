@@ -118,11 +118,15 @@ def spend_to_allowed_payee(
             detail=error_response("ESCROW_NOT_ACTIVE", "Escrow is no longer available for spending."),
         )
 
-    payee_stmt = select(AllowedPayee).where(
-        AllowedPayee.escrow_id == escrow_id,
-        AllowedPayee.payee_ref == payee_ref,
+    payee_stmt = (
+        select(AllowedPayee)
+        .where(
+            AllowedPayee.escrow_id == escrow_id,
+            AllowedPayee.payee_ref == payee_ref,
+        )
+        .with_for_update()
     )
-    payee = db.scalars(payee_stmt).first()
+    payee = db.execute(payee_stmt).scalar_one_or_none()
     if payee is None:
         logger.warning(
             "Usage spend for unauthorized payee", extra={"escrow_id": escrow_id, "payee_ref": payee_ref}
@@ -141,7 +145,13 @@ def spend_to_allowed_payee(
         payee.spent_today = Decimal("0")
         payee.last_reset_at = today
 
-    if payee.daily_limit is not None and (payee.spent_today + amount) > payee.daily_limit:
+    spent_today = (payee.spent_today or Decimal("0"))
+    spent_total = (payee.spent_total or Decimal("0"))
+
+    new_daily = spent_today + amount
+    new_total = spent_total + amount
+
+    if payee.daily_limit is not None and new_daily > payee.daily_limit:
         logger.info(
             "Daily limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
@@ -151,7 +161,7 @@ def spend_to_allowed_payee(
             detail=error_response("DAILY_LIMIT_REACHED", "Daily limit would be exceeded."),
         )
 
-    if payee.total_limit is not None and (payee.spent_total + amount) > payee.total_limit + EPS:
+    if payee.total_limit is not None and new_total > payee.total_limit + EPS:
         logger.info(
             "Total limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
@@ -198,8 +208,8 @@ def spend_to_allowed_payee(
         )
         return payment
 
-    payee.spent_today = (payee.spent_today or Decimal("0")) + amount
-    payee.spent_total = (payee.spent_total or Decimal("0")) + amount
+    payee.spent_today = new_daily
+    payee.spent_total = new_total
     payee.last_reset_at = today
 
     event = EscrowEvent(
