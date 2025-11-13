@@ -14,10 +14,11 @@ async def test_transaction_authorization_and_idempotency(client, auth_headers):
     receiver_id = receiver.json()["id"]
 
     # Unauthorized transfer attempt
+    missing_key = uuid4().hex
     response = await client.post(
         "/transactions",
         json={"sender_id": sender_id, "receiver_id": receiver_id, "amount": 100.0, "currency": "USD"},
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": missing_key},
     )
     assert response.status_code == 403
     body = response.json()
@@ -85,7 +86,35 @@ async def test_transaction_with_certified_receiver(client, auth_headers):
             "amount": 250.0,
             "currency": "EUR",
         },
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": uuid4().hex},
     )
     assert response.status_code == 201
     assert response.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_transactions_missing_idempotency_key_rejected(client, auth_headers):
+    sender = await client.post(
+        "/users",
+        json={"username": "sender-missing", "email": "sender-missing@example.com"},
+        headers=auth_headers,
+    )
+    receiver = await client.post(
+        "/users",
+        json={"username": "receiver-missing", "email": "receiver-missing@example.com"},
+        headers=auth_headers,
+    )
+
+    response = await client.post(
+        "/transactions",
+        json={
+            "sender_id": sender.json()["id"],
+            "receiver_id": receiver.json()["id"],
+            "amount": 10.0,
+            "currency": "USD",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"

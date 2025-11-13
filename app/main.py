@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import db  # moteur/metadata centralisés
-from app.config import AppInfo, get_settings
+from app.config import AppInfo, SCHEDULER_ENABLED, get_settings
 from app.core.logging import get_logger, setup_logging
 import app.models  # enregistre les tables
 from app.routers import apikeys, get_api_router
@@ -18,7 +18,7 @@ from app.utils.errors import error_response
 
 settings = get_settings()
 logger = get_logger(__name__)
-scheduler = AsyncIOScheduler()
+scheduler: AsyncIOScheduler | None = None
 
 # -------- Lifespan (nouveau mécanisme) --------
 @asynccontextmanager
@@ -30,18 +30,29 @@ async def lifespan(app: FastAPI):
     db.init_engine()  # sync, idempotent
     # IMPORTANT : créer les tables ici quand on utilise lifespan
     db.create_all()
-    scheduler.start()
-    scheduler.add_job(
-        expire_mandates_once,
-        "interval",
-        minutes=60,
-        id="expire-mandates",
-        replace_existing=True,
-    )
+    # NOTE: In multi-replica deployments, enable SCHEDULER_ENABLED=true on ONE runner only (others=false).
+    # For 1.0.0 consider external cron/worker or APScheduler with a distributed job store/lock.
+    if SCHEDULER_ENABLED:
+        global scheduler
+        scheduler = AsyncIOScheduler()
+        scheduler.start()
+        scheduler.add_job(
+            expire_mandates_once,
+            "interval",
+            minutes=60,
+            id="expire-mandates",
+            replace_existing=True,
+        )
+        if settings.app_env.lower() != "dev":
+            logger.warning(
+                "APScheduler enabled with in-memory store; ensure only one runner has SCHEDULER_ENABLED=1 in production.",
+                extra={"env": settings.app_env},
+            )
     try:
         yield
     finally:
-        scheduler.shutdown(wait=False)
+        if scheduler:
+            scheduler.shutdown(wait=False)
         db.close_engine()
         logger.info("Application shutdown", extra={"env": settings.app_env})
 
