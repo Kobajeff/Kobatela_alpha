@@ -1,5 +1,6 @@
 """User endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -8,6 +9,7 @@ from app.schemas.user import UserCreate, UserRead
 from app.models.api_key import ApiScope
 from app.security import require_api_key, require_scope
 from app.utils.errors import error_response
+from app.utils.audit import log_audit
 
 router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(require_api_key)])
 
@@ -23,6 +25,24 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
 
     user = User(**payload.model_dump())
     db.add(user)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response("USER_CREATE_FAILED", "Could not create user."),
+        ) from exc
+
+    log_audit(
+        db,
+        actor="admin",
+        action="CREATE_USER",
+        entity="User",
+        entity_id=user.id,
+        data={"username": user.username, "email": user.email},
+    )
+
     db.commit()
     db.refresh(user)
     return user

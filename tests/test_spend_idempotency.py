@@ -10,8 +10,7 @@ from app.models.escrow import EscrowAgreement, EscrowDeposit, EscrowStatus
 from app.models.user import User
 
 
-@pytest.mark.anyio
-async def test_spend_without_idempotency_key_is_not_blocked(client, sender_headers, db_session):
+def _prepare_usage_context(db_session):
     now = datetime.now(tz=UTC)
     sender = User(username=f"sender-{uuid4().hex[:8]}", email=f"sender-{uuid4().hex[:8]}@example.com")
     provider = User(username=f"provider-{uuid4().hex[:8]}", email=f"provider-{uuid4().hex[:8]}@example.com")
@@ -44,10 +43,36 @@ async def test_spend_without_idempotency_key_is_not_blocked(client, sender_heade
     db_session.add_all([deposit, payee])
     db_session.commit()
 
+    return escrow
+
+
+@pytest.mark.anyio
+async def test_spend_requires_idempotency_key(client, sender_headers, db_session):
+    escrow = _prepare_usage_context(db_session)
+
     payload = {"escrow_id": escrow.id, "payee_ref": "PAYEE-1", "amount": "10.00"}
-    first = await client.post("/spend", json=payload, headers=sender_headers)
-    second = await client.post("/spend", json=payload, headers=sender_headers)
+    response = await client.post("/spend", json=payload, headers=sender_headers)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
+
+
+@pytest.mark.anyio
+async def test_spend_with_idempotency_key_is_idempotent(client, sender_headers, db_session):
+    escrow = _prepare_usage_context(db_session)
+
+    payload = {"escrow_id": escrow.id, "payee_ref": "PAYEE-1", "amount": "10.00"}
+    idem_key = uuid4().hex
+    headers = {**sender_headers, "Idempotency-Key": idem_key}
+    first = await client.post("/spend", json=payload, headers=headers)
+    second = await client.post("/spend", json=payload, headers=headers)
 
     assert first.status_code in (200, 201)
     assert second.status_code in (200, 201)
-    assert first.json()["payment_id"] != second.json()["payment_id"]
+    assert first.json()["payment_id"] == second.json()["payment_id"]
+
+@pytest.mark.anyio
+async def test_spend_missing_idempotency_key_is_rejected(client, sender_headers):
+    resp = await client.post("/spend", json=payload, headers=sender_headers)  # sans Idempotency-Key
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"

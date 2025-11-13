@@ -4,7 +4,7 @@ from __future__ import annotations
 from decimal import Decimal
 import uuid
 
-from fastapi import APIRouter, Depends, Header, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from app.schemas.spend import (
 )
 from app.services import spend as spend_service
 from app.services import usage as usage_service
+from app.utils.errors import error_response
 
 router = APIRouter(
     prefix="/spend",
@@ -34,7 +35,7 @@ router = APIRouter(
     "/categories",
     response_model=SpendCategoryRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
 def create_category(payload: SpendCategoryCreate, db: Session = Depends(get_db)):
     return spend_service.create_category(db, payload)
@@ -44,7 +45,7 @@ def create_category(payload: SpendCategoryCreate, db: Session = Depends(get_db))
     "/merchants",
     response_model=MerchantRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
 def create_merchant(payload: MerchantCreate, db: Session = Depends(get_db)):
     return spend_service.create_merchant(db, payload)
@@ -53,7 +54,7 @@ def create_merchant(payload: MerchantCreate, db: Session = Depends(get_db)):
 @router.post(
     "/allow",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
 def allow_usage(payload: AllowedUsageCreate, db: Session = Depends(get_db)):
     return spend_service.allow_usage(db, payload)
@@ -122,13 +123,20 @@ def spend(
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    key = idempotency_key or f"auto-{uuid.uuid4().hex}"
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /spend.",
+            ),
+        )
     payment = usage_service.spend_to_allowed_payee(
         db,
         escrow_id=payload.escrow_id,
         payee_ref=payload.payee_ref,
         amount=payload.amount,
-        idempotency_key=key,
+        idempotency_key=idempotency_key,
         note=payload.note,
     )
     return {
