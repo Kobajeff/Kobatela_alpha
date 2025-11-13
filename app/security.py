@@ -95,7 +95,7 @@ def require_scope(allowed: set[ApiScope]) -> Callable:
         if key.scope not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_response("FORBIDDEN", "Scope not allowed"),
+                detail=error_response("INSUFFICIENT_SCOPE", "Scope not allowed"),
             )
     return _dep
 

@@ -13,6 +13,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
+import hashlib
 
 # --- Config env par défaut
 os.environ.setdefault("DATABASE_URL", "sqlite:///./kobatella_test.db")
@@ -31,6 +32,7 @@ from app.models import (
     User,
 )
 from app.models.api_key import ApiKey, ApiScope
+from app.utils.apikey import hash_key
 
 DB_PATH = Path("./kobatella_test.db")
 
@@ -94,18 +96,26 @@ def auth_headers() -> dict[str, str]:
 @pytest.fixture
 def make_api_key(db_session: Session) -> Callable[..., ApiKey]:
     def _factory(
-        *,
         name: str,
         key: str,
-        scope: ApiScope = ApiScope.sender,
+        scope: ApiScope = ApiScope.sender,   # 👈 valeur par défaut ajoutée ici
         is_active: bool = True,
     ) -> ApiKey:
-        api_key = ApiKey(name=name, key=key, scope=scope, is_active=is_active)
+        # exemple de corps – garde ton implémentation actuelle si elle diffère
+        api_key = ApiKey(
+            name=name,
+            prefix="test_" + scope.value,
+            key_hash=hash_key(key),
+            scope=scope,
+            is_active=is_active,
+        )
         db_session.add(api_key)
-        db_session.flush()
+        db_session.commit()
+        db_session.refresh(api_key)
         return api_key
 
     return _factory
+
 
 
 @pytest.fixture
