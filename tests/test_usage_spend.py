@@ -64,7 +64,7 @@ async def test_add_payee_and_spend_limits(client, auth_headers):
     )
     assert spend_ok.status_code == 200
     spend_payload = spend_ok.json()
-    assert spend_payload["status"] == "SENT"
+    assert spend_payload["status"] == "SETTLED"
 
     idempotent = await client.post(
         "/spend",

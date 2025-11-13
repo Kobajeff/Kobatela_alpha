@@ -68,6 +68,9 @@ async def test_manual_payment_finalizes_escrow(client, admin_headers, db_session
     refreshed_escrow = db_session.get(EscrowAgreement, escrow.id)
     assert refreshed_escrow.status == EscrowStatus.RELEASED
 
+    settled_payment = db_session.get(Payment, payment.id)
+    assert settled_payment.status == PaymentStatus.SETTLED
+
     closed_event = (
         db_session.execute(
             select(EscrowEvent)

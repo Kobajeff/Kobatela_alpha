@@ -51,6 +51,16 @@ async def test_admin_allowed_on_allowlist(client, admin_headers):
     assert response.status_code in (200, 201)
 
 
+@pytest.mark.anyio
+async def test_sender_forbidden_on_transactions(client, sender_headers):
+    response = await client.post(
+        "/transactions",
+        json={"sender_id": 1, "receiver_id": 2, "amount": 5, "currency": "USD"},
+        headers={**sender_headers, "Idempotency-Key": uuid4().hex},
+    )
+    assert response.status_code == 403
+
+
 async def test_legacy_key_rejected_outside_dev(monkeypatch, client):
     monkeypatch.setattr("app.config.DEV_API_KEY_ALLOWED", False, raising=False)
     monkeypatch.setattr("app.security.DEV_API_KEY_ALLOWED", False, raising=False)

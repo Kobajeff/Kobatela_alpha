@@ -44,6 +44,11 @@ async def lifespan(app: FastAPI):
             id="expire-mandates",
             replace_existing=True,
         )
+        if settings.app_env.lower() != "dev":
+            logger.warning(
+                "APScheduler enabled with in-memory store; ensure only one runner has SCHEDULER_ENABLED=1 in production.",
+                extra={"env": settings.app_env},
+            )
     try:
         yield
     finally:

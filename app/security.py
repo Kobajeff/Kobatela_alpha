@@ -113,13 +113,17 @@ def require_api_key(
     # Book-keeping : last_used_at + audit
     now = datetime.now(UTC)
     key.last_used_at = now
+    prefix = getattr(key, "prefix", None)
+    payload = {"scope": key.scope.value}
+    if prefix:
+        payload["prefix"] = prefix
     db.add(
         AuditLog(
-            actor="apikey",
+            actor=f"apikey:{key.id}",
             action="API_KEY_USED",
             entity="ApiKey",
             entity_id=key.id,
-            data_json={"scope": key.scope.value},
+            data_json=payload,
             at=now,
         )
     )

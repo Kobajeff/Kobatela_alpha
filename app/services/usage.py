@@ -12,13 +12,41 @@ from app.models.audit import AuditLog
 from app.models.escrow import EscrowAgreement, EscrowEvent, EscrowStatus
 from app.models.payment import Payment
 from app.services.idempotency import get_existing_by_key
-from app.services.payments import available_balance, execute_payout
+from app.services.payments import available_balance, execute_payout, finalize_payment_settlement
+from app.utils.audit import log_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
 EPS = Decimal("1e-9")
+
+
+def _audit_usage(
+    db: Session,
+    *,
+    action: str,
+    escrow_id: int,
+    payee_ref: str,
+    amount: Decimal,
+    entity_id: int | None = None,
+    note: str | None = None,
+) -> None:
+    payload = {
+        "escrow_id": escrow_id,
+        "payee_ref": payee_ref,
+        "amount": str(amount),
+    }
+    if note is not None:
+        payload["note"] = note
+    log_audit(
+        db,
+        actor="system",
+        action=action,
+        entity="AllowedPayee",
+        entity_id=entity_id,
+        data=payload,
+    )
 
 def add_allowed_payee(
     db: Session,
@@ -104,6 +132,13 @@ def spend_to_allowed_payee(
 
     escrow = db.get(EscrowAgreement, escrow_id)
     if escrow is None:
+        _audit_usage(
+            db,
+            action="USAGE_ESCROW_NOT_FOUND",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=error_response("ESCROW_NOT_FOUND", "Escrow not found."),
@@ -112,6 +147,14 @@ def spend_to_allowed_payee(
     if escrow.status in {EscrowStatus.RELEASED, EscrowStatus.REFUNDED, EscrowStatus.CANCELLED}:
         logger.warning(
             "Escrow closed for usage spend", extra={"escrow_id": escrow_id, "status": escrow.status.value}
+        )
+        _audit_usage(
+            db,
+            action="USAGE_ESCROW_CLOSED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            note=escrow.status.value,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -130,6 +173,13 @@ def spend_to_allowed_payee(
     if payee is None:
         logger.warning(
             "Usage spend for unauthorized payee", extra={"escrow_id": escrow_id, "payee_ref": payee_ref}
+        )
+        _audit_usage(
+            db,
+            action="USAGE_PAYEE_FORBIDDEN",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -156,6 +206,14 @@ def spend_to_allowed_payee(
             "Daily limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
         )
+        _audit_usage(
+            db,
+            action="USAGE_DAILY_LIMIT_REJECTED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            entity_id=payee.id,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=error_response("DAILY_LIMIT_REACHED", "Daily limit would be exceeded."),
@@ -165,6 +223,14 @@ def spend_to_allowed_payee(
         logger.info(
             "Total limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
+        )
+        _audit_usage(
+            db,
+            action="USAGE_TOTAL_LIMIT_REJECTED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            entity_id=payee.id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -176,6 +242,14 @@ def spend_to_allowed_payee(
         logger.warning(
             "Insufficient escrow balance for usage spend",
             extra={"escrow_id": escrow_id, "amount": amount, "balance": balance},
+        )
+        _audit_usage(
+            db,
+            action="USAGE_BALANCE_REJECTED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            entity_id=payee.id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -195,6 +269,14 @@ def spend_to_allowed_payee(
             status_code=status.HTTP_409_CONFLICT,
             detail=error_response("INSUFFICIENT_ESCROW_BALANCE", str(exc)),
         ) from exc
+
+    finalize_payment_settlement(
+        db,
+        payment,
+        source="usage-spend",
+        extra={"idempotency_key": payment.idempotency_key, "note": note},
+    )
+    db.refresh(payment)
 
     event_exists_stmt = select(EscrowEvent).where(
         EscrowEvent.escrow_id == escrow.id,

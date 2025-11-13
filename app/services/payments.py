@@ -261,9 +261,6 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
                 at=utcnow(),
             )
         )
-        _finalize_escrow_if_paid(db, escrow.id)  # ← ajoute la fonction ci-dessous si pas encore là
-
-
     try:
         executed = execute_payout(
             db,
@@ -279,17 +276,80 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
         ) from exc
 
     db.refresh(payment)
-    _handle_post_payment(db, payment)
+    finalize_payment_settlement(
+        db,
+        payment,
+        source="manual-execute",
+        extra={"idempotency_key": payment.idempotency_key},
+    )
+    db.refresh(payment)
+    db.refresh(executed)
     return executed
 
-
-def _handle_post_payment(db: Session, payment: Payment) -> None:
-    """Synchronise escrow state once a payment has been persisted."""
+def finalize_payment_settlement(
+    db: Session,
+    payment: Payment,
+    *,
+    source: str,
+    extra: dict | None = None,
+) -> None:
+    """Mark a payment as settled and propagate escrow closure when appropriate."""
 
     if payment is None or payment.escrow_id is None:
         return
 
+    if payment.status == PaymentStatus.SETTLED:
+        return
+
+    now = utcnow()
+    payment.status = PaymentStatus.SETTLED
+    db.add(payment)
+
+    event_key = f"payment:{payment.id}:settled"
+    existing_event = db.scalar(
+        select(EscrowEvent.id).where(
+            EscrowEvent.escrow_id == payment.escrow_id,
+            EscrowEvent.idempotency_key == event_key,
+        )
+    )
+    payload = {
+        "payment_id": payment.id,
+        "amount": str(payment.amount),
+        "source": source,
+    }
+    if extra:
+        payload.update(extra)
+
+    if existing_event is None:
+        db.add(
+            EscrowEvent(
+                escrow_id=payment.escrow_id,
+                kind="PAYMENT_SETTLED",
+                idempotency_key=event_key,
+                data_json=payload,
+                at=now,
+            )
+        )
+
+    db.add(
+        AuditLog(
+            actor=source,
+            action="PAYMENT_SETTLED",
+            entity="Payment",
+            entity_id=payment.id,
+            data_json={
+                "escrow_id": payment.escrow_id,
+                "amount": str(payment.amount),
+                "source": source,
+                **(extra or {}),
+            },
+            at=now,
+        )
+    )
+
     _finalize_escrow_if_paid(db, payment.escrow_id)
+    db.commit()
+
 
 def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
     total = int(db.scalar(
@@ -330,4 +390,4 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
             )
             db.commit()
 
-__all__ = ["available_balance", "execute_payment", "execute_payout"]
+__all__ = ["available_balance", "execute_payment", "execute_payout", "finalize_payment_settlement"]

@@ -13,11 +13,15 @@ from app.schemas.transaction import (
     TransactionCreate,
     TransactionRead,
 )
-from app.security import require_api_key, require_scope
+from app.security import require_scope
 from app.services import transactions as transactions_service
 from app.utils.errors import error_response
 
-router = APIRouter(prefix="", tags=["transactions"])
+router = APIRouter(
+    prefix="",
+    tags=["transactions"],
+    dependencies=[Depends(require_scope({ApiScope.admin}))],
+)
 
 
 @router.post(
@@ -55,7 +59,18 @@ def post_transaction(
 ) -> Transaction:
     """Create a restricted transaction."""
 
-    transaction, _created = transactions_service.create_transaction(db, payload, idempotency_key=idempotency_key)
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /transactions.",
+            ),
+        )
+
+    transaction, _created = transactions_service.create_transaction(
+        db, payload, idempotency_key=idempotency_key
+    )
     return transaction
 
 

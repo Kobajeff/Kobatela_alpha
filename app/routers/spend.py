@@ -85,7 +85,7 @@ class AddPayeeIn(BaseModel):
 @router.post(
     "/allowed",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
+    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
 def add_allowed_payee(payload: AddPayeeIn, db: Session = Depends(get_db)):
     payee = usage_service.add_allowed_payee(
