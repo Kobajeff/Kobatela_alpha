@@ -51,7 +51,7 @@ async def test_certification_emits_audit(client, admin_headers, db_session):
     audit_entry = (
         db_session.execute(
             select(AuditLog)
-            .where(AuditLog.action == "ACCOUNT_CERTIFIED")
+            .where(AuditLog.action == "CERTIFICATION_UPDATE")
             .order_by(AuditLog.at.desc())
         )
         .scalars()
