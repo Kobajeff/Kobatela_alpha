@@ -3,19 +3,22 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import Any
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.config import AppInfo, get_settings
 from app import db  # moteur/metadata centralisés
+from app.config import AppInfo, get_settings
 from app.core.logging import get_logger, setup_logging
 import app.models  # enregistre les tables
-from app.routers import get_api_router
+from app.routers import apikeys, get_api_router
+from app.services.cron import expire_mandates_once
 from app.utils.errors import error_response
 
 settings = get_settings()
 logger = get_logger(__name__)
+scheduler = AsyncIOScheduler()
 
 # -------- Lifespan (nouveau mécanisme) --------
 @asynccontextmanager
@@ -27,9 +30,18 @@ async def lifespan(app: FastAPI):
     db.init_engine()  # sync, idempotent
     # IMPORTANT : créer les tables ici quand on utilise lifespan
     db.create_all()
+    scheduler.start()
+    scheduler.add_job(
+        expire_mandates_once,
+        "interval",
+        minutes=60,
+        id="expire-mandates",
+        replace_existing=True,
+    )
     try:
         yield
     finally:
+        scheduler.shutdown(wait=False)
         db.close_engine()
         logger.info("Application shutdown", extra={"env": settings.app_env})
 
@@ -40,12 +52,23 @@ app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
 # Middleware & routes
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.CORS_ALLOW_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
+
+if settings.PROMETHEUS_ENABLED:
+    from starlette_exporter import PrometheusMiddleware, handle_metrics
+
+    app.add_middleware(PrometheusMiddleware)
+    app.add_route("/metrics", handle_metrics)
+
+if settings.SENTRY_DSN:
+    import sentry_sdk
+
+    sentry_sdk.init(dsn=settings.SENTRY_DSN, traces_sample_rate=0.2)
 app.include_router(get_api_router())
+app.include_router(apikeys.router)
 
 # Handlers d’erreurs
 @app.exception_handler(Exception)

@@ -2,6 +2,7 @@
 from .alert import Alert
 from .allowlist import AllowedRecipient
 from .allowed_payee import AllowedPayee
+from .api_key import ApiKey, ApiScope
 from .audit import AuditLog
 from .base import Base
 from .certified import CertifiedAccount, CertificationLevel
@@ -19,6 +20,8 @@ __all__ = [
     "Alert",
     "AllowedRecipient",
     "AllowedPayee",
+    "ApiKey",
+    "ApiScope",
     "AuditLog",
     "Base",
     "CertifiedAccount",
