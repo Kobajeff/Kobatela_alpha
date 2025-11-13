@@ -12,13 +12,41 @@ from app.models.audit import AuditLog
 from app.models.escrow import EscrowAgreement, EscrowEvent, EscrowStatus
 from app.models.payment import Payment
 from app.services.idempotency import get_existing_by_key
-from app.services.payments import available_balance, execute_payout
+from app.services.payments import available_balance, execute_payout, finalize_payment_settlement
+from app.utils.audit import log_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
 EPS = Decimal("1e-9")
+
+
+def _audit_usage(
+    db: Session,
+    *,
+    action: str,
+    escrow_id: int,
+    payee_ref: str,
+    amount: Decimal,
+    entity_id: int | None = None,
+    note: str | None = None,
+) -> None:
+    payload = {
+        "escrow_id": escrow_id,
+        "payee_ref": payee_ref,
+        "amount": str(amount),
+    }
+    if note is not None:
+        payload["note"] = note
+    log_audit(
+        db,
+        actor="system",
+        action=action,
+        entity="AllowedPayee",
+        entity_id=entity_id,
+        data=payload,
+    )
 
 def add_allowed_payee(
     db: Session,
@@ -104,6 +132,13 @@ def spend_to_allowed_payee(
 
     escrow = db.get(EscrowAgreement, escrow_id)
     if escrow is None:
+        _audit_usage(
+            db,
+            action="USAGE_ESCROW_NOT_FOUND",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=error_response("ESCROW_NOT_FOUND", "Escrow not found."),
@@ -113,19 +148,38 @@ def spend_to_allowed_payee(
         logger.warning(
             "Escrow closed for usage spend", extra={"escrow_id": escrow_id, "status": escrow.status.value}
         )
+        _audit_usage(
+            db,
+            action="USAGE_ESCROW_CLOSED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            note=escrow.status.value,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=error_response("ESCROW_NOT_ACTIVE", "Escrow is no longer available for spending."),
         )
 
-    payee_stmt = select(AllowedPayee).where(
-        AllowedPayee.escrow_id == escrow_id,
-        AllowedPayee.payee_ref == payee_ref,
+    payee_stmt = (
+        select(AllowedPayee)
+        .where(
+            AllowedPayee.escrow_id == escrow_id,
+            AllowedPayee.payee_ref == payee_ref,
+        )
+        .with_for_update()
     )
-    payee = db.scalars(payee_stmt).first()
+    payee = db.execute(payee_stmt).scalar_one_or_none()
     if payee is None:
         logger.warning(
             "Usage spend for unauthorized payee", extra={"escrow_id": escrow_id, "payee_ref": payee_ref}
+        )
+        _audit_usage(
+            db,
+            action="USAGE_PAYEE_FORBIDDEN",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -141,20 +195,42 @@ def spend_to_allowed_payee(
         payee.spent_today = Decimal("0")
         payee.last_reset_at = today
 
-    if payee.daily_limit is not None and (payee.spent_today + amount) > payee.daily_limit:
+    spent_today = (payee.spent_today or Decimal("0"))
+    spent_total = (payee.spent_total or Decimal("0"))
+
+    new_daily = spent_today + amount
+    new_total = spent_total + amount
+
+    if payee.daily_limit is not None and new_daily > payee.daily_limit:
         logger.info(
             "Daily limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
+        )
+        _audit_usage(
+            db,
+            action="USAGE_DAILY_LIMIT_REJECTED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            entity_id=payee.id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=error_response("DAILY_LIMIT_REACHED", "Daily limit would be exceeded."),
         )
 
-    if payee.total_limit is not None and (payee.spent_total + amount) > payee.total_limit + EPS:
+    if payee.total_limit is not None and new_total > payee.total_limit + EPS:
         logger.info(
             "Total limit reached",
             extra={"escrow_id": escrow_id, "payee_ref": payee_ref, "amount": amount},
+        )
+        _audit_usage(
+            db,
+            action="USAGE_TOTAL_LIMIT_REJECTED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            entity_id=payee.id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -166,6 +242,14 @@ def spend_to_allowed_payee(
         logger.warning(
             "Insufficient escrow balance for usage spend",
             extra={"escrow_id": escrow_id, "amount": amount, "balance": balance},
+        )
+        _audit_usage(
+            db,
+            action="USAGE_BALANCE_REJECTED",
+            escrow_id=escrow_id,
+            payee_ref=payee_ref,
+            amount=amount,
+            entity_id=payee.id,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -186,6 +270,14 @@ def spend_to_allowed_payee(
             detail=error_response("INSUFFICIENT_ESCROW_BALANCE", str(exc)),
         ) from exc
 
+    finalize_payment_settlement(
+        db,
+        payment,
+        source="usage-spend",
+        extra={"idempotency_key": payment.idempotency_key, "note": note},
+    )
+    db.refresh(payment)
+
     event_exists_stmt = select(EscrowEvent).where(
         EscrowEvent.escrow_id == escrow.id,
         EscrowEvent.kind == "USAGE_SPEND",
@@ -198,8 +290,8 @@ def spend_to_allowed_payee(
         )
         return payment
 
-    payee.spent_today = (payee.spent_today or Decimal("0")) + amount
-    payee.spent_total = (payee.spent_total or Decimal("0")) + amount
+    payee.spent_today = new_daily
+    payee.spent_total = new_total
     payee.last_reset_at = today
 
     event = EscrowEvent(

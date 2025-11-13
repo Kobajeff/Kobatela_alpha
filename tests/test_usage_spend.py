@@ -1,5 +1,6 @@
 """Tests for conditional usage spending."""
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 
@@ -63,7 +64,7 @@ async def test_add_payee_and_spend_limits(client, auth_headers):
     )
     assert spend_ok.status_code == 200
     spend_payload = spend_ok.json()
-    assert spend_payload["status"] == "SENT"
+    assert spend_payload["status"] == "SETTLED"
 
     idempotent = await client.post(
         "/spend",
@@ -76,7 +77,7 @@ async def test_add_payee_and_spend_limits(client, auth_headers):
     exceed_daily = await client.post(
         "/spend",
         json={"escrow_id": escrow_id, "payee_ref": "IBAN-XYZ-001", "amount": 40.0},
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": f"usage-spend-{uuid4().hex}"},
     )
     assert exceed_daily.status_code == 409
     assert exceed_daily.json()["error"]["code"] == "DAILY_LIMIT_REACHED"
@@ -104,7 +105,7 @@ async def test_add_payee_and_spend_limits(client, auth_headers):
     exceed_total = await client.post(
         "/spend",
         json={"escrow_id": escrow_id, "payee_ref": "IBAN-XYZ-002", "amount": 60.0},
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": f"usage-spend-{uuid4().hex}"},
     )
     assert exceed_total.status_code == 409
     assert exceed_total.json()["error"]["code"] == "TOTAL_LIMIT_REACHED"

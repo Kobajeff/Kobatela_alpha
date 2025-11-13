@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.payment import Payment, PaymentStatus
 from app.models.psp_webhook import PSPWebhookEvent
 from app.models.audit import AuditLog
+from app.services.payments import finalize_payment_settlement
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -98,18 +99,12 @@ def _mark_payment_settled(db: Session, *, psp_ref: str | None) -> None:
         logger.info("Payment already settled", extra={"payment_id": payment.id})
         return
 
-    payment.status = PaymentStatus.SETTLED
-    db.add(
-        AuditLog(
-            actor="psp",
-            action="PAYMENT_SETTLED",
-            entity="Payment",
-            entity_id=payment.id,
-            data_json={"psp_ref": psp_ref},
-            at=utcnow(),
-        )
+    finalize_payment_settlement(
+        db,
+        payment,
+        source="psp",
+        extra={"psp_ref": psp_ref},
     )
-    db.add(payment)
     logger.info("Payment settled", extra={"payment_id": payment.id})
 
 
