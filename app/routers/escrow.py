@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.escrow import EscrowAgreement
 from app.schemas.escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate, EscrowRead
+from app.models.api_key import ApiScope
 from app.security import require_scope
 from app.services import escrow as escrow_service
 from app.utils.errors import error_response
@@ -12,7 +13,7 @@ from app.utils.errors import error_response
 router = APIRouter(
     prefix="/escrows",
     tags=["escrow"],
-    dependencies=[Depends(require_scope("sender"))],
+    dependencies=[Depends(require_scope({ApiScope.sender}))],
 )
 
 

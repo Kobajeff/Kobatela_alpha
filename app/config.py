@@ -13,7 +13,7 @@ ENV = os.getenv("KOB_ENV", "dev").lower()
 
 # Clé legacy (uniquement tolérée en DEV)
 DEV_API_KEY = os.getenv("DEV_API_KEY") or os.getenv("API_KEY") or "dev-secret-key"
-DEV_API_KEY_ALLOWED = ENV == "dev"
+DEV_API_KEY_ALLOWED = ENV in {"dev", "local", "dev_local"}
 
 # Scopes reconnus
 API_SCOPES = {"sender", "support", "admin"}

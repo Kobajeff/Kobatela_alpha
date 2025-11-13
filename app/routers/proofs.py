@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.schemas.proof import ProofCreate, ProofDecision, ProofRead
+from app.models.api_key import ApiScope
 from app.security import require_scope
 from app.services import proofs as proofs_service
 from app.utils.errors import error_response
@@ -11,7 +12,7 @@ from app.utils.errors import error_response
 router = APIRouter(
     prefix="/proofs",
     tags=["proofs"],
-    dependencies=[Depends(require_scope("sender"))],
+    dependencies=[Depends(require_scope({ApiScope.sender}))],
 )
 
 
