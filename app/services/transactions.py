@@ -11,7 +11,7 @@ from app.models.allowlist import AllowedRecipient
 from app.models.audit import AuditLog
 from app.models.certified import CertifiedAccount
 from app.models.transaction import Transaction, TransactionStatus
-from app.schemas.transaction import TransactionCreate
+from app.schemas.transaction import AllowlistCreate, CertificationCreate, TransactionCreate
 from app.services import alerts as alert_service
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
@@ -20,6 +20,91 @@ from app.utils.time import utcnow
 logger = logging.getLogger(__name__)
 
 ALERT_UNAUTHORIZED = "UNAUTHORIZED_TRANSFER_ATTEMPT"
+
+
+def _audit(
+    db: Session,
+    *,
+    actor: str,
+    action: str,
+    entity: str,
+    entity_id: int,
+    data: dict | None = None,
+) -> None:
+    db.add(
+        AuditLog(
+            actor=actor,
+            action=action,
+            entity=entity,
+            entity_id=entity_id,
+            data_json=data or {},
+            at=utcnow(),
+        )
+    )
+
+
+def add_to_allowlist(db: Session, payload: AllowlistCreate) -> dict[str, str]:
+    """Add a recipient to the sender allowlist and audit the mutation."""
+
+    exists_stmt = select(AllowedRecipient).where(
+        AllowedRecipient.owner_id == payload.owner_id,
+        AllowedRecipient.recipient_id == payload.recipient_id,
+    )
+    if db.execute(exists_stmt).first():
+        return {"status": "exists"}
+
+    entry = AllowedRecipient(owner_id=payload.owner_id, recipient_id=payload.recipient_id)
+    db.add(entry)
+    db.flush()
+    _audit(
+        db,
+        actor="admin",
+        action="ALLOWLIST_ADD",
+        entity="Allowlist",
+        entity_id=entry.id,
+        data={
+            "owner_id": payload.owner_id,
+            "recipient_id": payload.recipient_id,
+            "category_id": getattr(payload, "category_id", None),
+        },
+    )
+    db.commit()
+    logger.info(
+        "Allowlist entry created",
+        extra={"owner_id": payload.owner_id, "recipient_id": payload.recipient_id},
+    )
+    return {"status": "added"}
+
+
+def add_certification(db: Session, payload: CertificationCreate) -> dict[str, str]:
+    """Create or update a certified account entry with an audit trail."""
+
+    stmt = select(CertifiedAccount).where(CertifiedAccount.user_id == payload.user_id)
+    account = db.scalars(stmt).one_or_none()
+    now = utcnow()
+    if account:
+        account.level = payload.level
+        account.certified_at = now
+        status_label = "updated"
+        entity_id = account.id
+    else:
+        account = CertifiedAccount(user_id=payload.user_id, level=payload.level, certified_at=now)
+        db.add(account)
+        db.flush()
+        status_label = "created"
+        entity_id = account.id
+
+    _audit(
+        db,
+        actor="admin",
+        action="ACCOUNT_CERTIFIED",
+        entity="CertifiedAccount",
+        entity_id=entity_id,
+        data={"account_id": payload.user_id, "level": payload.level},
+    )
+    db.commit()
+    logger.info("Account certification updated", extra={"user_id": payload.user_id, "level": payload.level})
+    return {"status": status_label}
 
 
 def create_transaction(db: Session, payload: TransactionCreate, *, idempotency_key: str | None) -> Tuple[Transaction, bool]:

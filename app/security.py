@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime, UTC
-from typing import Callable
+from typing import Callable, Set
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.config import DEV_API_KEY, DEV_API_KEY_ALLOWED
+from app.config import DEV_API_KEY, DEV_API_KEY_ALLOWED, ENV
 from app.db import get_db
 from app.models.api_key import ApiKey, ApiScope
 from app.models.audit import AuditLog
@@ -52,8 +52,30 @@ def require_api_key(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=error_response("LEGACY_KEY_FORBIDDEN", "Legacy dev key is disabled."),
             )
-        # Bypass contrôlé : le scope sera validé dans require_scope (on tolère "legacy")
-        return "legacy"
+        now = datetime.now(UTC)
+        db.add(
+            AuditLog(
+                actor="legacy-apikey",
+                action="LEGACY_API_KEY_USED",
+                entity="ApiKey",
+                entity_id=0,
+                data_json={"env": ENV},
+                at=now,
+            )
+        )
+        db.commit()
+        fake = ApiKey(
+            id=0,
+            name="__legacy__",
+            prefix="legacy",
+            key_hash="legacy",
+            scope=ApiScope.admin,
+            is_active=True,
+            created_at=now,
+            expires_at=None,
+            last_used_at=now,
+        )
+        return fake
 
     # Clés normales (prefix + hash)
     key: ApiKey | None = find_valid_key(db, token)
@@ -80,23 +102,25 @@ def require_api_key(
     return key
 
 
-def require_scope(allowed: set[ApiScope]) -> Callable:
-    """
-    Enforce qu'une clé possède l'un des scopes autorisés.
-    - "legacy" (DEV_API_KEY) passe toujours.
-    - Admin bypass.
-    """
-    async def _dep(key=Depends(require_api_key)):
-        if key == "legacy":
-            return
-        # key est une instance ApiKey
-        if key.scope == ApiScope.admin:
-            return
-        if key.scope not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=error_response("INSUFFICIENT_SCOPE", "Scope not allowed"),
-            )
+def require_scope(allowed: Set[ApiScope]) -> Callable:
+    """Enforce qu'une clé possède l'un des scopes autorisés."""
+
+    if not allowed:
+        raise RuntimeError("require_scope needs a non-empty set of ApiScope")
+
+    def _dep(key: ApiKey = Depends(require_api_key)) -> ApiKey:
+        if key.id == 0:
+            return key
+        if key.scope == ApiScope.admin or key.scope in allowed:
+            return key
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(
+                "INSUFFICIENT_SCOPE",
+                f"Requires one of: {[scope.value for scope in allowed]}",
+            ),
+        )
+
     return _dep
 
 
