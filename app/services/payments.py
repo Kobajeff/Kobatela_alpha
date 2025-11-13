@@ -202,6 +202,17 @@ def execute_payout(
             return existing
         raise
 
+def _handle_post_payment(db: Session, payment: Payment) -> None:
+    """Synchronise escrow state once a payment has been persisted.
+
+    This keeps the escrow lifecycle consistent after any payout:
+    - if the escrow is now fully paid, it will be closed by `_finalize_escrow_if_paid`.
+    """
+
+    if payment is None or payment.escrow_id is None:
+        return
+
+    _finalize_escrow_if_paid(db, payment.escrow_id)
 
 def execute_payment(db: Session, payment_id: int) -> Payment:
     """Execute a payment entity via the public endpoint."""
