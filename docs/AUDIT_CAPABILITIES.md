@@ -96,8 +96,9 @@ State machines :
 - Audit : toutes les mutations critiques écrivent dans `AuditLog`, mais les actions back-office utilisent encore des acteurs génériques (cf. risques).【F:app/utils/audit.py†L10-L30】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L44-L118】
 
 ### Encadré DEV_API_KEY
-- La clé legacy n’est acceptée que lorsque `ENV` vaut `dev` et que `DEV_API_KEY_ALLOWED` est à `True`; dans ce cas `require_api_key` l’enregistre comme acteur `legacy-apikey` puis journalise `LEGACY_API_KEY_USED`.【F:app/security.py†L42-L83】
-- Dans tout autre environnement (staging/prod), FastAPI renvoie immédiatement `LEGACY_KEY_FORBIDDEN` (HTTP 401) sans requêter la base et force l’équipe à utiliser des clés nominatives sécurisées. Chaque rejet reste traçable puisque l’exception encode le code d’erreur dédié dans `error_response`.【F:app/security.py†L60-L71】【F:app/utils/errors.py†L5-L22】
+- La configuration centralisée fixe `DEV_API_KEY_ALLOWED = (ENV in {"dev", "local", "dev_local"})`, garantissant que la clé legacy n’est chargée qu’en environnement de développement contrôlé.【F:app/config.py†L11-L24】
+- Lorsque cette condition est vraie (ENV=dev seulement), le guard `require_api_key` accepte la clé, crée un audit `LEGACY_API_KEY_USED` et force l’acteur `legacy-apikey` pour éviter la confusion avec des clés nominatives.【F:app/security.py†L42-L83】
+- Dans tout autre environnement (staging/prod), le même guard rejette explicitement `DEV_API_KEY` avec le code d’erreur dédié `LEGACY_KEY_FORBIDDEN` (HTTP 401), tout en conservant une trace dans les journaux applicatifs ; aucune requête DB n’est effectuée tant que la clé n’est pas autorisée.【F:app/security.py†L60-L92】【F:app/utils/errors.py†L5-L22】
 
 ## G. Observability & ops
 - Logging structuré et Sentry optionnel via `app/config.py`; CORS et métriques exposées par la configuration centrale.【F:app/main.py†L52-L78】【F:app/config.py†L32-L71】
