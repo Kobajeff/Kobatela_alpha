@@ -1,7 +1,5 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
-from pydantic import BaseSettings
 import os
 
 # Définir le chemin de la base de données SQLite
@@ -17,15 +15,4 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-class Settings(BaseSettings):
-    # ... tes configs existantes ...
-    AI_ENABLED: bool = True
-    AI_MODEL: str = "gpt-5-mini"
-    AI_TIMEOUT_SECONDS: int = 15
-    AI_MAX_TOKENS: int = 600   # réponse courte JSON
-    AI_BASE_URL: str | None = None  # si tu utilises un proxy plus tard
-    OPENAI_API_KEY: str | None = None  # lu depuis .env
-
-    class Config:
-        env_file = ".env"
 
