@@ -49,6 +49,10 @@ class Milestone(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     proof_type: Mapped[str] = mapped_column(String(50), nullable=False)
     validator: Mapped[str] = mapped_column(String(50), nullable=False, default="SENDER")
+
+    # Detailed configuration of the expected proof for this milestone
+    proof_requirements: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     geofence_lat: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     geofence_lng: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     geofence_radius_m: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
