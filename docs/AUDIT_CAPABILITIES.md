@@ -94,7 +94,10 @@ State machines :
 - Idempotence & transactions : dépôts, paiements, usage spend et transactions réutilisent `get_existing_by_key` et contraintes uniques pour éviter les doublons, avec verrou `FOR UPDATE` sur les payees.【F:app/services/escrow.py†L101-L165】【F:app/services/payments.py†L205-L392】【F:app/services/usage.py†L97-L246】
 - PSP & secrets : démarrage bloquant sans `PSP_WEBHOOK_SECRET`, HMAC SHA-256 + timestamp ±5 min et persistance idempotente des événements.【F:app/main.py†L23-L64】【F:app/services/psp_webhooks.py†L21-L109】
 - Audit : toutes les mutations critiques écrivent dans `AuditLog`, mais les actions back-office utilisent encore des acteurs génériques (cf. risques).【F:app/utils/audit.py†L10-L30】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L44-L118】
-- **Encadré DEV_API_KEY** : la clé legacy n’est acceptée que lorsque `DEV_API_KEY_ALLOWED` est vrai (ENV=`dev/local`), sinon la dépendance retourne `LEGACY_KEY_FORBIDDEN` (401) sans toucher à la base. L’usage en dev génère un audit dédié `LEGACY_API_KEY_USED`.【F:app/security.py†L42-L106】【F:app/utils/apikey.py†L31-L48】
+
+### Encadré DEV_API_KEY
+- La clé legacy n’est acceptée que lorsque `ENV` vaut `dev` et que `DEV_API_KEY_ALLOWED` est à `True`; dans ce cas `require_api_key` l’enregistre comme acteur `legacy-apikey` puis journalise `LEGACY_API_KEY_USED`.【F:app/security.py†L42-L83】
+- Dans tout autre environnement (staging/prod), FastAPI renvoie immédiatement `LEGACY_KEY_FORBIDDEN` (HTTP 401) sans requêter la base et force l’équipe à utiliser des clés nominatives sécurisées. Chaque rejet reste traçable puisque l’exception encode le code d’erreur dédié dans `error_response`.【F:app/security.py†L60-L71】【F:app/utils/errors.py†L5-L22】
 
 ## G. Observability & ops
 - Logging structuré et Sentry optionnel via `app/config.py`; CORS et métriques exposées par la configuration centrale.【F:app/main.py†L52-L78】【F:app/config.py†L32-L71】
