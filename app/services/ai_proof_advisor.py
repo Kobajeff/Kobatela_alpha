@@ -10,7 +10,11 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
+try:
+    from openai import OpenAI  # type: ignore[import-not-found]
+except Exception:  # noqa: BLE001
+    OpenAI = None  # type: ignore[assignment]
+
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +225,19 @@ def call_ai_proof_advisor(
                 "Une revue manuelle est recommandée."
             ),
         }
+    if OpenAI is None:
+        logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
+        return {
+            "risk_level": "warning",
+            "score": 0.5,
+            "flags": ["ai_unavailable", "missing_sdk"],
+            "explanation": (
+                "L'analyse automatique n'a pas pu être effectuée "
+                "car le SDK OpenAI n'est pas installé côté serveur. "
+                "Une revue manuelle est recommandée."
+            ),
+        }
+
 
     client = OpenAI(api_key=api_key)
 

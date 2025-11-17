@@ -58,6 +58,7 @@ class MilestoneCreate(BaseModel):
     geofence_lat: float | None = Field(default=None)
     geofence_lng: float | None = Field(default=None)
     geofence_radius_m: float | None = Field(default=None, ge=0)
+    proof_requirements: dict[str, Any] | None = Field(default=None)
 
 
 class MilestoneRead(BaseModel):
@@ -75,6 +76,7 @@ class MilestoneRead(BaseModel):
     geofence_lat: float | None
     geofence_lng: float | None
     geofence_radius_m: float | None
+    proof_requirements: dict[str, Any] | None
     status: MilestoneStatus
     created_at: datetime
     updated_at: datetime
