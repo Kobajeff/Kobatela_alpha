@@ -178,6 +178,46 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
                     # -> fall back to normal behavior (no AI enrichment)
                     # (nothing else to do here)
 
+    else:
+        # NON-PHOTO proofs (PDF, invoices, contracts, other)
+        # → always manual review (no auto_approve) BUT we call AI as an advisor if enabled.
+        if ai_enabled():
+            try:
+                ai_context = {
+                    "mandate_context": {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_idx": payload.milestone_idx,
+                        "milestone_label": milestone.label,
+                        "milestone_amount": float(milestone.amount),
+                        "proof_type": milestone.proof_type,
+                        "proof_requirements": getattr(milestone, "proof_requirements", None),
+                    },
+                    "backend_checks": {
+                        # For now, no hard validation for docs
+                        "has_metadata": payload.metadata is not None,
+                        "validation_ok": True,
+                        "validation_reason": None,
+                    },
+                    "document_context": {
+                        "type": payload.type,
+                        "storage_url": payload.storage_url,
+                        "sha256": payload.sha256,
+                        "metadata": metadata_payload,
+                        # Future extension: "ocr_text": "..." once OCR is wired
+                    },
+                }
+
+                ai_result = call_ai_proof_advisor(
+                    context=ai_context,
+                    proof_storage_url=payload.storage_url,
+                )
+                metadata_payload["ai_assessment"] = ai_result
+
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("AI proof advisor (doc) integration failed: %s", exc)
+                # Never block the proof because of AI issues
+                # → continue with manual review as usual
+
     # -------------------------
     # Contrôles d’état APRES validation photo
     # -------------------------
