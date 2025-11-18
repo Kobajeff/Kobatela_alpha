@@ -9,8 +9,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.api_key import ApiScope
-from app.security import require_api_key, require_scope
+from app.models.api_key import ApiKey, ApiScope
+from app.security import require_scope
 from app.schemas.spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -22,12 +22,12 @@ from app.schemas.spend import (
 )
 from app.services import spend as spend_service
 from app.services import usage as usage_service
+from app.utils.audit import actor_from_api_key
 from app.utils.errors import error_response
 
 router = APIRouter(
     prefix="/spend",
     tags=["spend"],
-    dependencies=[Depends(require_api_key)],
 )
 
 
@@ -35,43 +35,58 @@ router = APIRouter(
     "/categories",
     response_model=SpendCategoryRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
-def create_category(payload: SpendCategoryCreate, db: Session = Depends(get_db)):
-    return spend_service.create_category(db, payload)
+def create_category(
+    payload: SpendCategoryCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+):
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return spend_service.create_category(db, payload, actor=actor)
 
 
 @router.post(
     "/merchants",
     response_model=MerchantRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
-def create_merchant(payload: MerchantCreate, db: Session = Depends(get_db)):
-    return spend_service.create_merchant(db, payload)
+def create_merchant(
+    payload: MerchantCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+):
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return spend_service.create_merchant(db, payload, actor=actor)
 
 
 @router.post(
     "/allow",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
-def allow_usage(payload: AllowedUsageCreate, db: Session = Depends(get_db)):
-    return spend_service.allow_usage(db, payload)
+def allow_usage(
+    payload: AllowedUsageCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+):
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return spend_service.allow_usage(db, payload, actor=actor)
 
 
 @router.post(
     "/purchases",
     response_model=PurchaseRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
 )
 def create_purchase(
     payload: PurchaseCreate,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    api_key: ApiKey = Depends(require_scope({ApiScope.sender, ApiScope.admin})),
 ):
-    return spend_service.create_purchase(db, payload, idempotency_key=idempotency_key)
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return spend_service.create_purchase(
+        db, payload, idempotency_key=idempotency_key, actor=actor
+    )
 
 
 class AddPayeeIn(BaseModel):
@@ -85,9 +100,13 @@ class AddPayeeIn(BaseModel):
 @router.post(
     "/allowed",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
-def add_allowed_payee(payload: AddPayeeIn, db: Session = Depends(get_db)):
+def add_allowed_payee(
+    payload: AddPayeeIn,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+):
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
     payee = usage_service.add_allowed_payee(
         db,
         escrow_id=payload.escrow_id,
@@ -95,6 +114,7 @@ def add_allowed_payee(payload: AddPayeeIn, db: Session = Depends(get_db)):
         label=payload.label,
         daily_limit=payload.daily_limit,
         total_limit=payload.total_limit,
+        actor=actor,
     )
     return {
         "id": payee.id,
@@ -116,12 +136,12 @@ class SpendIn(BaseModel):
 @router.post(
     "",
     status_code=status.HTTP_200_OK,
-    dependencies=[Depends(require_scope({ApiScope.sender, ApiScope.admin}))],
 )
 def spend(
     payload: SpendIn,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    api_key: ApiKey = Depends(require_scope({ApiScope.sender, ApiScope.admin})),
 ):
     if not idempotency_key:
         raise HTTPException(
@@ -131,6 +151,7 @@ def spend(
                 "Header 'Idempotency-Key' is required for POST /spend.",
             ),
         )
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
     payment = usage_service.spend_to_allowed_payee(
         db,
         escrow_id=payload.escrow_id,
@@ -138,6 +159,7 @@ def spend(
         amount=payload.amount,
         idempotency_key=idempotency_key,
         note=payload.note,
+        actor=actor,
     )
     return {
         "payment_id": payment.id,

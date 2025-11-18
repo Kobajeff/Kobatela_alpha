@@ -7,14 +7,16 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
+
+
+from app.config import settings
+from app.services.ai_proof_flags import ai_model, ai_timeout_seconds
 
 try:
     from openai import OpenAI  # type: ignore[import-not-found]
 except Exception:  # noqa: BLE001
-    OpenAI = None  # type: ignore[assignment]
-
+    OpenAI = None  
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,39 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Champs sensibles à masquer avant envoi au fournisseur IA
+SENSITIVE_KEYS = {
+    "iban",
+    "iban_full",
+    "iban_last4",
+    "account_number",
+    "beneficiary_name",
+    "supplier_name",
+}
+
+
+def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a deep-copied context with sensitive fields masked."""
+
+    try:
+        ctx = json.loads(json.dumps(context, ensure_ascii=False, default=str))
+    except (TypeError, ValueError):
+        ctx = {}
+
+    doc = ctx.get("document_context") or {}
+    url = doc.get("storage_url")
+    if isinstance(url, str):
+        doc["storage_url"] = url.rsplit("/", 1)[-1]
+    metadata = doc.get("metadata") or {}
+    for key in list(metadata.keys()):
+        lower = key.lower()
+        if any(token in lower for token in SENSITIVE_KEYS):
+            metadata[key] = "***masked***"
+    doc["metadata"] = metadata
+    ctx["document_context"] = doc
+    return ctx
+
+
 # --------------------------------------------------
 # 3️⃣ Fonction principale : appel OpenAI
 # --------------------------------------------------
@@ -212,7 +247,7 @@ def call_ai_proof_advisor(
 ) -> Dict[str, Any]:
     """Call the Kobatela AI Proof Advisor."""
 
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = settings.OPENAI_API_KEY
     if not api_key:
         logger.warning("OPENAI_API_KEY is not set; returning fallback AI result.")
         return {
@@ -225,6 +260,11 @@ def call_ai_proof_advisor(
                 "Une revue manuelle est recommandée."
             ),
         }
+
+    client = OpenAI(api_key=api_key)
+
+    sanitized_context = _sanitize_context(context)
+    user_content = build_ai_user_content(sanitized_context)
     if OpenAI is None:
         logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
         return {
@@ -239,9 +279,7 @@ def call_ai_proof_advisor(
         }
 
 
-    client = OpenAI(api_key=api_key)
-
-    user_content = build_ai_user_content(context)
+ 
 
     messages: List[Dict[str, Any]] = []
     messages.append(
@@ -280,8 +318,9 @@ def call_ai_proof_advisor(
 
     try:
         resp = client.responses.create(
-            model=model,
+            model=model or ai_model(),
             input=messages,
+            timeout=ai_timeout_seconds(),
         )
 
         raw_text = getattr(resp, "output_text", None)

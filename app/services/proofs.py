@@ -32,7 +32,7 @@ from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
-from typing import Final
+from typing import Any, Final
 
 HARD_VALIDATION_ERRORS: Final = {
     "OUT_OF_GEOFENCE",
@@ -47,7 +47,9 @@ AI_PROOF_ENABLED: Final[bool] = os.getenv("KCT_AI_PROOF_ENABLED", "0") == "1"
 logger = logging.getLogger(__name__)
 
 
-def submit_proof(db: Session, payload: ProofCreate) -> Proof:
+def submit_proof(
+    db: Session, payload: ProofCreate, *, actor: str | None = None
+) -> Proof:
     """Submit a proof for the given escrow milestone."""
 
     milestone = _get_milestone_by_idx(db, payload.escrow_id, payload.milestone_idx)
@@ -62,6 +64,8 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     # en cas d’erreur "dure" (géofence, exif manquant, trop vieux, etc.).
 
     metadata_payload = dict(payload.metadata or {})
+    metadata_payload.pop("ai_assessment", None)
+    ai_result: dict[str, Any] | None = None
 
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
         metadata_payload = enrich_metadata_with_invoice_ocr(
@@ -277,12 +281,18 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         status=proof_status,
         created_at=utcnow(),
     )
+    if ai_result:
+        proof.ai_risk_level = ai_result.get("risk_level")
+        proof.ai_score = ai_result.get("score")
+        proof.ai_flags = list(ai_result.get("flags") or [])
+        proof.ai_explanation = ai_result.get("explanation")
+        proof.ai_checked_at = utcnow()
     db.add(proof)
     db.flush()
 
     db.add(
         AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="SUBMIT_PROOF",
             entity="Proof",
             entity_id=proof.id,
@@ -340,7 +350,9 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
 
 
 
-def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proof:
+def approve_proof(
+    db: Session, proof_id: int, *, note: str | None = None, actor: str | None = None
+) -> Proof:
     """Approve a proof and trigger payment execution."""
 
     proof = _get_proof_or_404(db, proof_id)
@@ -372,7 +384,7 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
 
     db.add(
         AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="APPROVE_PROOF",
             entity="Proof",
             entity_id=proof.id,
@@ -414,7 +426,9 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     return proof
 
 
-def reject_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proof:
+def reject_proof(
+    db: Session, proof_id: int, *, note: str | None = None, actor: str | None = None
+) -> Proof:
     """Reject a proof submission and reset the milestone."""
 
     proof = _get_proof_or_404(db, proof_id)
@@ -439,7 +453,7 @@ def reject_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proo
 
     db.add(
         AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="REJECT_PROOF",
             entity="Proof",
             entity_id=proof.id,

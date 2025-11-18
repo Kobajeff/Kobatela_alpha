@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.api_key import ApiScope
+from app.models.api_key import ApiKey, ApiScope
 from app.models.transaction import Transaction
 from app.schemas.transaction import (
     AllowlistCreate,
@@ -16,14 +16,10 @@ from app.schemas.transaction import (
 )
 from app.security import require_scope
 from app.services import transactions as transactions_service
+from app.utils.audit import actor_from_api_key
 from app.utils.errors import error_response
 
-# RBAC global : toutes les routes de ce router = admin ONLY
-router = APIRouter(
-    prefix="",
-    tags=["transactions"],
-    dependencies=[Depends(require_scope({ApiScope.admin}))],
-)
+router = APIRouter(prefix="", tags=["transactions"])
 
 
 @router.post(
@@ -33,10 +29,12 @@ router = APIRouter(
 def add_to_allowlist(
     payload: AllowlistCreate,
     db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
 ) -> dict[str, str]:
     """Add a recipient to the sender's allowlist (admin only)."""
 
-    return transactions_service.add_to_allowlist(db, payload)
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return transactions_service.add_to_allowlist(db, payload, actor=actor)
 
 
 @router.post(
@@ -46,10 +44,12 @@ def add_to_allowlist(
 def add_certification(
     payload: CertificationCreate,
     db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
 ) -> dict[str, str]:
     """Mark a user as certified (admin only)."""
 
-    return transactions_service.add_certification(db, payload)
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return transactions_service.add_certification(db, payload, actor=actor)
 
 
 @router.post(
@@ -61,6 +61,7 @@ def post_transaction(
     payload: TransactionCreate,
     db: Session = Depends(get_db),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
 ) -> Transaction:
     """Create a restricted transaction (admin only)."""
 
@@ -82,8 +83,9 @@ def post_transaction(
             ),
         )
 
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
     transaction, _created = transactions_service.create_transaction(
-        db, payload, idempotency_key=idempotency_key
+        db, payload, idempotency_key=idempotency_key, actor=actor
     )
     return transaction
 
@@ -95,6 +97,7 @@ def post_transaction(
 def get_transaction(
     transaction_id: int,
     db: Session = Depends(get_db),
+    _api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
 ) -> Transaction:
     """Retrieve transaction details (admin only)."""
 
