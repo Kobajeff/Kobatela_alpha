@@ -1,6 +1,7 @@
 """Proof lifecycle services."""
 import logging
 from decimal import Decimal
+import os
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -42,7 +43,7 @@ HARD_VALIDATION_ERRORS: Final = {
     "BAD_EXIF_TIMESTAMP",
 }
 
-
+AI_PROOF_ENABLED: Final[bool] = os.getenv("KCT_AI_PROOF_ENABLED", "0") == "1"
 logger = logging.getLogger(__name__)
 
 
