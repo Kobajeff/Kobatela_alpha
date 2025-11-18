@@ -5,7 +5,18 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select
 
-from app.models import EscrowAgreement, EscrowStatus, Milestone, MilestoneStatus, Payment, PaymentStatus
+from app.config import settings
+from app.models import (
+    EscrowAgreement,
+    EscrowStatus,
+    Milestone,
+    MilestoneStatus,
+    Payment,
+    PaymentStatus,
+    User,
+)
+from app.schemas.proof import ProofCreate
+from app.services import proofs as proofs_service
 
 
 @pytest.mark.anyio("asyncio")
@@ -98,3 +109,67 @@ async def test_proof_approval_triggers_payment(client, auth_headers, db_session)
     second_exec = await client.post(f"/payments/execute/{payment.id}", headers=auth_headers)
     assert second_exec.status_code == 200
     assert second_exec.json()["status"] == "SENT"
+
+
+def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
+    original_flag = settings.AI_PROOF_ADVISOR_ENABLED
+    settings.AI_PROOF_ADVISOR_ENABLED = True
+    stub_result = {
+        "risk_level": "warning",
+        "score": 0.66,
+        "flags": ["invoice_amount_match"],
+        "explanation": "Analyse réussie",
+    }
+    monkeypatch.setattr(
+        proofs_service, "call_ai_proof_advisor", lambda **_: stub_result,
+    )
+    try:
+        client = User(username="ai-client", email="ai-client@example.com")
+        provider = User(username="ai-provider", email="ai-provider@example.com")
+        db_session.add_all([client, provider])
+        db_session.flush()
+
+        escrow = EscrowAgreement(
+            client_id=client.id,
+            provider_id=provider.id,
+            amount_total=Decimal("100.00"),
+            currency="USD",
+            status=EscrowStatus.FUNDED,
+            release_conditions_json={"type": "milestone"},
+            deadline_at=datetime.now(tz=UTC),
+        )
+        db_session.add(escrow)
+        db_session.flush()
+
+        milestone = Milestone(
+            escrow_id=escrow.id,
+            idx=1,
+            label="Document",
+            amount=Decimal("25.00"),
+            proof_type="PDF",
+            validator="SENDER",
+            status=MilestoneStatus.WAITING,
+        )
+        db_session.add(milestone)
+        db_session.commit()
+
+        payload = ProofCreate(
+            escrow_id=escrow.id,
+            milestone_idx=1,
+            type="PDF",
+            storage_url="https://storage.example.com/proofs/doc.pdf",
+            sha256="hash-ai-proof",
+            metadata={"invoice_total_amount": 25},
+        )
+
+        proof = proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+        db_session.refresh(proof)
+
+        assert proof.ai_risk_level == stub_result["risk_level"]
+        assert proof.ai_score == stub_result["score"]
+        assert proof.ai_flags == stub_result["flags"]
+        assert proof.ai_explanation == stub_result["explanation"]
+        assert proof.ai_checked_at is not None
+        assert proof.metadata_["ai_assessment"] == stub_result
+    finally:
+        settings.AI_PROOF_ADVISOR_ENABLED = original_flag

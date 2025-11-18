@@ -28,8 +28,14 @@ async def lifespan(app: FastAPI):
     if settings.psp_webhook_secret is None:
         raise RuntimeError("PSP_WEBHOOK_SECRET manquant : configurez la variable d'environnement ou le fichier .env")
     db.init_engine()  # sync, idempotent
-    # IMPORTANT : créer les tables ici quand on utilise lifespan
-    db.create_all()
+    if settings.app_env.lower() in {"dev", "local", "test"}:
+        logger.info("Running Base.metadata.create_all() in %s", settings.app_env)
+        db.create_all()
+    else:
+        logger.info(
+            "Skipping create_all in ENV=%s; apply Alembic migrations before startup.",
+            settings.app_env,
+        )
     # NOTE: In multi-replica deployments, enable SCHEDULER_ENABLED=true on ONE runner only (others=false).
     # For 1.0.0 consider external cron/worker or APScheduler with a distributed job store/lock.
     # Lancer le scheduler uniquement sur l'instance désignée (cf. déploiement multi-runner).

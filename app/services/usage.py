@@ -31,6 +31,7 @@ def _audit_usage(
     amount: Decimal,
     entity_id: int | None = None,
     note: str | None = None,
+    actor: str | None = None,
 ) -> None:
     payload = {
         "escrow_id": escrow_id,
@@ -41,7 +42,7 @@ def _audit_usage(
         payload["note"] = note
     log_audit(
         db,
-        actor="system",
+        actor=actor or "system",
         action=action,
         entity="AllowedPayee",
         entity_id=entity_id,
@@ -56,6 +57,7 @@ def add_allowed_payee(
     label: str,
     daily_limit: Decimal | None = None,
     total_limit: Decimal | None = None,
+    actor: str | None = None,
 ) -> AllowedPayee:
     """Register a payee that is allowed to receive conditional usage payouts."""
 
@@ -72,7 +74,7 @@ def add_allowed_payee(
     db.add(payee)
 
     audit = AuditLog(
-        actor="system",
+        actor=actor or "system",
         action="ADD_ALLOWED_PAYEE",
         entity="AllowedPayee",
         data_json={
@@ -113,6 +115,7 @@ def spend_to_allowed_payee(
     amount: Decimal,
     idempotency_key: str,
     note: str | None = None,
+    actor: str | None = None,
 ) -> Payment:
     """Execute a payout toward an allowed payee respecting configured limits."""
 
@@ -138,6 +141,7 @@ def spend_to_allowed_payee(
             escrow_id=escrow_id,
             payee_ref=payee_ref,
             amount=amount,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -155,6 +159,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             note=escrow.status.value,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -180,6 +185,7 @@ def spend_to_allowed_payee(
             escrow_id=escrow_id,
             payee_ref=payee_ref,
             amount=amount,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -213,6 +219,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             entity_id=payee.id,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -231,6 +238,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             entity_id=payee.id,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -250,6 +258,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             entity_id=payee.id,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -308,7 +317,7 @@ def spend_to_allowed_payee(
         at=utcnow(),
     )
     audit = AuditLog(
-        actor="system",
+        actor=actor or "system",
         action="USAGE_SPEND",
         entity="Payment",
         entity_id=payment.id,

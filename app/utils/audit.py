@@ -1,6 +1,8 @@
 """Audit logging helper utilities."""
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
@@ -28,3 +30,12 @@ def log_audit(
             at=utcnow(),
         )
     )
+
+
+def actor_from_api_key(api_key: Any, fallback: str = "system") -> str:
+    """Return the canonical actor string for a given API key object."""
+
+    prefix = getattr(api_key, "prefix", None)
+    if prefix:
+        return f"apikey:{prefix}"
+    return fallback
