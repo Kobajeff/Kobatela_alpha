@@ -1,128 +1,223 @@
-# Kobatela_alpha — Capability & Stability Audit (2025-11-13)
+# Kobatela_alpha — Capability & Stability Audit (2025-11-19)
 
 ## A. Executive summary
-- Forces :
-  - RBAC granulaire : les routes antifraude et catalogue (`/transactions`, `/spend/categories|merchants|allow|allowed`) sont limitées aux scopes `admin` ou `support`, tandis que les dépenses exigent un en-tête `Idempotency-Key` explicite.【F:app/routers/transactions.py†L20-L58】【F:app/routers/spend.py†L33-L140】
-  - Usage conditionnel robuste : les dépenses vérifient l’existence d’un payee, verrouillent pessimiste `AllowedPayee` et auditent chaque rejet ou succès.【F:app/services/usage.py†L40-L246】
-  - Cycle paiement homogène : `execute_payment`, la dépense usage et le webhook PSP convergent vers `finalize_payment_settlement`, qui règle le paiement, crée les événements et ferme l’escrow lorsque tous les jalons sont payés.【F:app/services/payments.py†L205-L392】【F:app/services/psp_webhooks.py†L70-L138】
-  - Audit centralisé : `log_audit` est appelé par la création d’utilisateurs, le catalogue spend et les services transactions afin de tracer chaque mutation sensible.【F:app/utils/audit.py†L10-L30】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L20-L118】【F:app/routers/users.py†L17-L47】
-  - Clé legacy maîtrisée : `DEV_API_KEY` n’est acceptée que lorsque `ENV=dev`, sinon l’API renvoie `LEGACY_KEY_FORBIDDEN` et journalise l’usage en mode local.【F:app/security.py†L31-L131】【F:app/utils/apikey.py†L31-L48】
-- Risques :
-  - Attribution incomplète : plusieurs audits back-office (`CREATE_USER`, `SPEND_*`, `ALLOWLIST_ADD`) fixent `actor="admin"/"system"`, ce qui empêche de rattacher l’action à une clé API précise (P1 conformité).【F:app/routers/users.py†L37-L44】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L44-L96】
-  - Collisions `spend/allow` silencieuses : en cas de doublon, l’endpoint retourne `status="exists"` sans audit ni métrique, masquant des tentatives répétées (P1).【F:app/services/spend.py†L184-L225】
-  - Idempotence optionnelle sur `/spend/purchases` : l’en-tête reste facultatif, et un retry réseau peut créer un achat dupliqué avant intervention humaine (P1).【F:app/routers/spend.py†L62-L74】【F:app/services/spend.py†L229-L413】
-  - Scheduler en mémoire : APScheduler démarre en mode local sans verrou distribué ; hors dev un simple oubli de configuration peut lancer plusieurs instances (P2).【F:app/main.py†L33-L74】
-  - Ajout de payee impersonnel : `add_allowed_payee` enregistre `actor="system"` sans contextualiser la clé API support à l’origine de l’ajout (P2 traçabilité).【F:app/services/usage.py†L40-L110】
+Hardened API-key–based access control on every critical router (escrow, proofs, spend, transactions) and consistent actor propagation into AuditLog, enabling reliable forensics (app/routers/*, app/services/*, app/utils/audit.py).
 
-Readiness score : **85 / 100** — GO conditionnel (prioriser les correctifs P1 avant onboarding multi-comptes).
+Proof ingestion pipeline layers EXIF/geofence checks, optional invoice OCR enrichment, structured backend checks, and the AI Proof Advisor with sanitized contexts plus persisted ai_* verdicts (app/services/proofs.py, invoice_ocr.py, document_checks.py, ai_proof_advisor.py).
 
-## B. Capability map (current, concrete)
-### B.1 Feature coverage
-| Feature | Implemented endpoints/modules | Status | Notes |
+Monetary flows rely on Numeric columns and _to_decimal normalization so usage mandates, purchases, and escrow payouts stay in lockstep (app/models/*, app/services/spend.py).
+
+PSP webhook security now includes HMAC verification with timestamp drift and dual-secret rotation guards, keeping settlements authoritative (app/services/psp_webhooks.py, app/config.py).
+
+Observability-ready: structured logging, centralized error handlers, Alembic migrations up to 1b7cc2cfcc6e, and a living audit report checked into docs/AUDIT_CAPABILITIES.md.
+
+Legacy clients must now supply Idempotency-Key on /spend/purchases; without rollout comms the stricter guard can block legitimate retries (R1).
+
+PSP secret rotation still manual: even though the code accepts a NEXT secret, there is no operational procedure or alerting when both secrets are unset or stale (R2).
+
+Audit sanitization masks obvious PII but leaves secondary attributes (city, merchant labels) untouched; leaked logs may still reveal personal data (R3).
+
+Misconfigured ALLOW_DB_CREATE_ALL outside dev could still run create_all() despite new guardrails, risking schema drift vs Alembic (R4).
+
+AI override governance depends on reviewers adding notes; no dashboard enforces secondary validation when ai_risk_level in {warning,suspect}, so risk acceptance may be under-documented (R5).
+
+Readiness score: 92 / 100 (GO for a limited staging with ≈10 external users once P0 items are operationalized).
+
+## B. Capability map (current features)
+### B.1 Functional coverage
+| Feature | Endpoints / modules involved | Status (OK / Partial / Missing) | Notes |
 | --- | --- | --- | --- |
-| Santé & métadonnées | `GET /health` → `health.healthcheck` | Implémenté | Ping JSON sans auth pour monitoring.【F:app/routers/health.py†L4-L11】 |
-| Gestion clés API | `POST/GET/DELETE /apikeys` | Implémenté | Admin-only, génération hashée + audit création/révocation.【F:app/routers/apikeys.py†L62-L173】 |
-| Gestion utilisateurs | `POST/GET /users` | Implémenté | Clés `admin/support`, audit `CREATE_USER` via `log_audit`.【F:app/routers/users.py†L17-L47】 |
-| Allowlist & certification | `POST /allowlist`, `POST /certified` | Implémenté | Scopes `admin`, déduplication et audit détaillé.【F:app/routers/transactions.py†L20-L42】【F:app/services/transactions.py†L44-L118】 |
-| Transactions restreintes | `POST/GET /transactions` | Implémenté | Admin-only + `Idempotency-Key` obligatoire et alertes antifraude.【F:app/routers/transactions.py†L20-L76】【F:app/services/transactions.py†L110-L182】 |
-| Escrow lifecycle | `/escrows/*` | Implémenté | Création, dépôts idempotents, transitions client/provider auditées.【F:app/routers/escrow.py†L13-L68】【F:app/services/escrow.py†L168-L213】 |
-| Mandats d’usage | `/mandates`, `/mandates/cleanup` | Implémenté | Validation bénéficiaires/merchants, audit création/expiration.【F:app/routers/mandates.py†L13-L32】【F:app/services/mandates.py†L91-L175】 |
-| Catalogue spend | `/spend/categories`, `/spend/merchants` | Implémenté | Restreint `admin/support`, audits `SPEND_*_CREATED`, contrôle de cohérence.【F:app/routers/spend.py†L33-L50】【F:app/services/spend.py†L98-L166】 |
-| Allow usage | `POST /spend/allow` | Implémenté | Règles admin/support, vérifie merchant/category, retourne `added`/`exists`.【F:app/routers/spend.py†L53-L59】【F:app/services/spend.py†L184-L225】 |
-| Purchases conditionnels | `POST /spend/purchases` | Implémenté | Consommation mandat atomique, audits mandat & achat (idempotence facultative).【F:app/routers/spend.py†L62-L74】【F:app/services/spend.py†L229-L413】 |
-| Allowed payees & usage spend | `POST /spend/allowed`, `POST /spend` | Implémenté | Admin/support pour l’ajout, dépense verrouillée `FOR UPDATE` + audit des rejets.【F:app/routers/spend.py†L84-L140】【F:app/services/usage.py†L40-L246】 |
-| Proof pipeline | `POST /proofs`, `POST /proofs/{id}/decision` | Implémenté | Validation, audit & transitions milestone/proof.【F:app/routers/proofs.py†L12-L37】【F:app/services/proofs.py†L139-L214】 |
-| Paiements & PSP | `POST /payments/execute/{id}`, `POST /psp/webhook` | Implémenté | Paiements idempotents, audit `EXECUTE_PAYOUT`, HMAC PSP obligatoire.【F:app/routers/payments.py†L11-L22】【F:app/services/payments.py†L205-L392】【F:app/services/psp_webhooks.py†L70-L138】 |
-| Back-office alerting | `GET /alerts` | Implémenté | Lecture filtrable réservée à `admin/support`.【F:app/routers/alerts.py†L12-L25】 |
+| Health & monitoring | GET /health, logging middleware | OK | Lightweight status JSON for uptime probes. |
+| User & API key management | app/routers/users.py, app/routers/apikeys.py, app/services/users.py | OK | Create/list users & keys, audit actor recorded. |
+| Escrow lifecycle | app/routers/escrow.py, app/services/escrow.py, payments.py | OK | Create, deposit (idempotent), deliver, approve/reject with AuditLog + payouts. |
+| Usage mandates & spend | app/routers/spend.py, app/services/spend.py, usage.py | OK | Allow merchants, enforce Decimal normalization, mandatory Idempotency-Key for purchases. |
+| Transactions / allowlist | app/routers/transactions.py, allowlist.py, certified.py | OK | Admin-only flows with idempotence & audit. |
+| Proof submission & decisions | app/routers/proofs.py, app/services/proofs.py | OK | Photo validations + auto-pay, doc proofs manual review with AI advisory and reviewer notes. |
+| PSP webhook & payouts | app/routers/psp.py, app/services/psp_webhooks.py, payments.py | OK | HMAC + timestamp drift, dual-secret rotation, payment status updates. |
+| AI Proof Advisor | ai_proof_flags.py, ai_proof_advisor.py, document_checks.py | OK | Flags off by default, sanitized context, persisted AI verdicts. |
+| Invoice OCR | app/services/invoice_ocr.py, proof submit hook | Partial | Stub provider; enrichment runs only when flag enabled, no real OCR yet. |
 
-### B.2 Supported end-to-end flows (today)
-- Mandat diaspora → achat conditionnel : `/users` (création) → `/mandates` (activation + audit) → `/spend/purchases` (consommation mandat, réutilisation idempotente).【F:app/routers/users.py†L17-L47】【F:app/services/mandates.py†L91-L175】【F:app/services/spend.py†L229-L413】
-- Escrow avec preuves et paiements : `/escrows` → `/escrows/{id}/deposit` (idempotent) → `/proofs` → `/payments/execute/{id}` puis `_finalize_escrow_if_paid` via `finalize_payment_settlement` clôture l’escrow et journalise.【F:app/routers/escrow.py†L13-L63】【F:app/services/proofs.py†L139-L214】【F:app/services/payments.py†L205-L392】
-- Flux PSP : `/psp/webhook` vérifie HMAC + timestamp, persiste l’événement et appelle `finalize_payment_settlement` pour harmoniser les états paiements/escrows.【F:app/services/psp_webhooks.py†L21-L109】【F:app/services/payments.py†L288-L392】
+### B.2 End-to-end journeys supported today
+- Simple escrow with photo proof: /escrows → /escrows/{id}/deposit → /proofs (PHOTO) → auto-approve via EXIF+geofence → /payments/execute triggered automatically.
+
+- Multi-milestone invoice mandate: /mandates → /spend/allow → /proofs (PDF/INVOICE) with OCR enrichment + AI advisory → manual decision with ai_reviewed_* metadata.
+
+- Merchant purchase flow: /spend/purchases with Idempotency-Key → spend recorded against mandate → AuditLog entry for the actor.
+
+- Admin transaction / allowlist: /allowlist + /certified + /transactions enforcing double checks and idempotence.
+
+- PSP settlement: PSP POST /psp/webhook signed with current or next secret → payments.update_status + AuditLog per event.
 
 ## C. Endpoint inventory
-| Method | Path | Handler | Auth | Roles | Request | Response | Codes |
+| Method | Path | Handler | Auth | Roles | Request model | Response model | HTTP codes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GET | /health | `health.healthcheck` | Aucune | - | - | `{status}` | 200【F:app/routers/health.py†L4-L11】 |
-| POST | /users | `users.create_user` | API key + scope | `admin`, `support` | `UserCreate` | `UserRead` | 201/400【F:app/routers/users.py†L17-L47】 |
-| POST | /allowlist | `transactions.add_to_allowlist` | API key + scope | `admin` | `AllowlistCreate` | `{status}` | 201/200【F:app/routers/transactions.py†L20-L34】 |
-| POST | /certified | `transactions.add_certification` | API key + scope | `admin` | `CertificationCreate` | `{status}` | 201【F:app/routers/transactions.py†L34-L42】 |
-| POST | /transactions | `transactions.post_transaction` | API key + scope | `admin` | `TransactionCreate` + `Idempotency-Key` requis | `TransactionRead` | 201/400【F:app/routers/transactions.py†L45-L59】 |
-| GET | /transactions/{id} | `transactions.get_transaction` | API key + scope | `admin` | - | `TransactionRead` | 200/404【F:app/routers/transactions.py†L62-L76】 |
-| POST | /escrows | `escrow.create_escrow` | API key + scope | `sender`, `admin` | `EscrowCreate` | `EscrowRead` | 201【F:app/routers/escrow.py†L13-L22】 |
-| POST | /escrows/{id}/deposit | `escrow.deposit` | API key + scope | `sender`, `admin` | `EscrowDepositCreate` + `Idempotency-Key?` | `EscrowRead` | 200【F:app/routers/escrow.py†L25-L32】 |
-| POST | /escrows/{id}/client-approve | `escrow.client_approve` | API key + scope | `sender`, `admin` | `EscrowActionPayload?` | `EscrowRead` | 200【F:app/routers/escrow.py†L40-L46】 |
-| POST | /alerts | `alerts.list_alerts` | API key + scope | `admin`, `support` | Query `type?` | `list[AlertRead]` | 200【F:app/routers/alerts.py†L12-L25】 |
-| POST | /mandates | `mandates.create_mandate` | API key + scope | `sender`, `admin` | `UsageMandateCreate` | `UsageMandateRead` | 201【F:app/routers/mandates.py†L13-L24】 |
-| POST | /spend/categories | `spend.create_category` | API key + scope | `admin`, `support` | `SpendCategoryCreate` | `SpendCategoryRead` | 201【F:app/routers/spend.py†L33-L40】 |
-| POST | /spend/merchants | `spend.create_merchant` | API key + scope | `admin`, `support` | `MerchantCreate` | `MerchantRead` | 201【F:app/routers/spend.py†L43-L50】 |
-| POST | /spend/allow | `spend.allow_usage` | API key + scope | `admin`, `support` | `AllowedUsageCreate` | `{status}` | 201/200【F:app/routers/spend.py†L53-L59】 |
-| POST | /spend/allowed | `spend.add_allowed_payee` | API key + scope | `admin`, `support` | `AddPayeeIn` | Payee dict | 201/409【F:app/routers/spend.py†L84-L140】【F:app/services/usage.py†L40-L110】 |
-| POST | /spend | `spend.spend` | API key + scope | `sender`, `admin` | `SpendIn` + `Idempotency-Key` requis | Paiement dict | 200/400/409【F:app/routers/spend.py†L115-L140】【F:app/services/usage.py†L115-L246】 |
-| POST | /payments/execute/{id} | `payments.execute_payment` | API key + scope | `sender`, `admin` | - | `PaymentRead` | 200/404/409【F:app/routers/payments.py†L11-L22】【F:app/services/payments.py†L205-L287】 |
-| POST | /psp/webhook | `psp.webhook` | Secret PSP + optional API key | - | Raw JSON + headers | `{ok, event_id}` | 200/401/503【F:app/routers/psp.py†L20-L61】 |
+| GET | /health | routers.health.healthcheck | None | - | - | {status:str} | 200 |
+| POST | /users | routers.users.create_user | API key | admin/support | UserCreate | UserRead | 201, 400 |
+| POST | /apikeys | routers.apikeys.create_api_key | API key | admin | ApiKeyCreate | ApiKeyRead | 201, 400 |
+| POST | /escrows | routers.escrow.create_escrow | API key | sender/admin | EscrowCreate | EscrowRead | 201 |
+| POST | /escrows/{id}/deposit | routers.escrow.deposit | API key + optional Idempotency-Key | sender | EscrowDepositCreate | EscrowRead | 200, 409 |
+| POST | /proofs | routers.proofs.submit_proof_route | API key | sender | ProofCreate | ProofRead | 201, 409, 422 |
+| POST | /proofs/{id}/decision | routers.proofs.decide_proof_route | API key | support/admin | ProofDecision | ProofRead | 200, 400 |
+| POST | /spend/allow | routers.spend.allow_usage | API key | sender/admin | AllowedUsageCreate | AllowedUsageRead | 201 |
+| POST | /spend/purchases | routers.spend.create_purchase | API key + Idempotency-Key required | sender/admin | PurchaseCreate | PurchaseRead | 201, 400, 409 |
+| POST | /spend | routers.spend.spend | API key + Idempotency-Key | sender/admin | SpendIn | PaymentRead | 200, 400, 409 |
+| POST | /transactions | routers.transactions.create_transaction | API key + Idempotency-Key | admin | TransactionCreate | TransactionRead | 201, 400 |
+| POST | /psp/webhook | routers.psp.psp_webhook | PSP secret(s) | - | raw JSON | {ok,event_id} | 200, 401, 503 |
 
-## D. Data model & states
-| Entity | Key fields & contraintes | Notes |
-| --- | --- | --- |
-| User | `username`, `email` uniques, `is_active` | Audit `CREATE_USER` mais acteur générique.【F:app/models/user.py†L11-L22】【F:app/routers/users.py†L37-L47】 |
-| ApiKey | `prefix`, `key_hash` uniques, `scope`, dates | Audit usage avec `actor=f"apikey:{id}"` et rejet clé legacy hors dev.【F:app/models/api_key.py†L12-L31】【F:app/security.py†L31-L131】 |
-| AllowedRecipient | `(owner_id, recipient_id)` unique | Retourne `exists` sans audit en doublon.【F:app/models/allowlist.py†L8-L15】【F:app/services/transactions.py†L44-L96】 |
-| CertifiedAccount | `user_id` unique, `level`, `certified_at` | Audit `CERTIFICATION_UPDATE` sur création/mise à jour.【F:app/models/certified.py†L18-L25】【F:app/services/transactions.py†L79-L107】 |
-| Transaction | `sender_id`, `receiver_id`, `amount`, `status`, `idempotency_key` | Enum `COMPLETED`, idempotence obligatoire côté API.【F:app/models/transaction.py†L20-L37】【F:app/routers/transactions.py†L45-L59】 |
-| EscrowAgreement | `client_id`, `provider_id`, `amount_total`, `status`, `deadline_at` | Événements JSON + audits transitions.【F:app/models/escrow.py†L23-L69】【F:app/services/escrow.py†L168-L213】 |
-| Milestone | `escrow_id`, `idx` unique, `amount`, `status` | Convergence proofs/paiements via `finalize_payment_settlement`.【F:app/models/milestone.py†L22-L47】【F:app/services/payments.py†L288-L392】 |
-| Payment | `escrow_id`, `amount`, `status`, `psp_ref`, `idempotency_key` | Numeric + audits `EXECUTE_PAYOUT` et `PAYMENT_SETTLED`.【F:app/models/payment.py†L21-L38】【F:app/services/payments.py†L205-L392】 |
-| AllowedPayee | `escrow_id`, `payee_ref` unique, limites `daily/total`, compteurs | Ajout audité (actor "system"), consommation verrouillée FOR UPDATE.【F:app/models/allowed_payee.py†L11-L32】【F:app/services/usage.py†L40-L210】 |
-| SpendCategory & Merchant | Codes/refs uniques | Audits `SPEND_CATEGORY_CREATED` & `SPEND_MERCHANT_CREATED`.【F:app/models/spend.py†L13-L160】【F:app/services/spend.py†L98-L166】 |
+## D. Data model & state machines
+Entities overview
 
-State machines :
-- Escrow : `DRAFT` → `FUNDED` → `RELEASABLE` → `RELEASED/REFUNDED/CANCELLED`, finalisé automatiquement quand tous les jalons sont payés.【F:app/models/escrow.py†L12-L69】【F:app/services/payments.py†L353-L390】
-- Milestone : `WAITING` → `PENDING_REVIEW` → `PAID`/`REJECTED`, orchestré par proofs et paiements.【F:app/models/milestone.py†L22-L47】【F:app/services/proofs.py†L139-L214】
-- Payment : `PENDING` → `SENT` → `SETTLED/ERROR`, harmonisé par `finalize_payment_settlement` ou le webhook PSP.【F:app/models/payment.py†L11-L38】【F:app/services/payments.py†L205-L392】【F:app/services/psp_webhooks.py†L70-L138】
-- UsageMandate : `ACTIVE` → `CONSUMED/EXPIRED`, consommation atomique via `create_purchase` et cron d’expiration.【F:app/models/usage_mandate.py†L30-L65】【F:app/services/spend.py†L229-L413】【F:app/services/mandates.py†L150-L175】
+EscrowAgreement (status Enum, Decimal amounts, FK to creator, relationships to Milestone, EscrowEvent).
+
+Milestone (ordering index, proof_type, proof_requirements JSON, optional geofence floats, Enum MilestoneStatus).
+
+Proof (metadata JSON column metadata_, AI columns ai_risk_level, ai_score, ai_flags JSON, ai_explanation, ai_checked_at, reviewer metadata ai_reviewed_by, ai_reviewed_at).
+
+UsageMandate, AllowedUsage, Purchase (Numeric amounts, unique constraints preventing overlapping mandates, total_spent tracking).
+
+Payment (PaymentStatus Enum, idempotency_key, FKs to escrow/milestone/proof, PSP references).
+
+Transaction, AuditLog, ApiKey, User, PSPWebhookEvent for compliance and ops.
+
+State machines
+
+Escrow: DRAFT → ACTIVE → WAITING_RELEASE → RELEASED/REFUNDED, transitions recorded via EscrowEvent and AuditLog inside app/services/escrow.py.
+
+Proof: WAITING → PENDING_REVIEW → APPROVED/REJECTED; PHOTO may jump to APPROVED with auto-payment; manual decisions enforce reviewer note when overriding AI warnings.
+
+Payment: PENDING → SENT → SETTLED/ERROR, with PSP webhook events updating status idempotently.
+
+Mandate/Purchase: Mandate stays ACTIVE until total_spent reaches limit_amount; purchases are COMPLETED once created under idempotent key.
 
 ## E. Stability results
-- `alembic current --verbose` (SQLite dev) : aucun drift signalé, base fraîche sans révision appliquée.【823cf6†L1-L4】
-- `alembic heads` → `8b7e_add_api_keys` (head unique).【dae9a3†L1-L2】
-- `pytest -q` : 51 tests verts, 1 avertissement Pydantic V2 (config class-based).【d1eb61†L1-L10】
-- Revue statique : aucun `@app.on_event`, vérifications d’attente `Idempotency-Key` sur `/spend` et `/transactions`, mais idempotence facultative sur `/spend/purchases` (voir risques).
+pytest -q → 67 passed, 1 skipped, 2 warnings (pydantic Config deprecation + async coroutine skip) (chunk 02faba).
+
+Alembic chain verified: alembic upgrade head, alembic current, alembic heads, alembic history --verbose all succeed with head 1b7cc2cfcc6e (chunks def6b5, 3ea749, 027c09, 867746).
+
+Static review highlights:
+
+OCR/AI helpers wrap network failures in try/except, returning advisory defaults (no blocking failures).
+
+sanitize_payload_for_audit masks IBAN/email/storage URL before logging; extend list for cities/vendors.
+
+Lifespan uses a single async context manager; no lingering @app.on_event handlers.
 
 ## F. Security & integrity
-- AuthN/Z : `require_api_key` journalise chaque appel avec l’identifiant de la clé, et `require_scope` accepte des ensembles d’`ApiScope` pour restreindre chaque route critique.【F:app/security.py†L31-L154】
-- Validation input : schémas Pydantic imposent montants positifs, devise ISO et formats proofs/mandats, limitant les injections incohérentes.【F:app/schemas/spend.py†L12-L140】【F:app/schemas/mandates.py†L12-L88】【F:app/schemas/proof.py†L7-L40】
-- Idempotence & transactions : dépôts, paiements, usage spend et transactions réutilisent `get_existing_by_key` et contraintes uniques pour éviter les doublons, avec verrou `FOR UPDATE` sur les payees.【F:app/services/escrow.py†L101-L165】【F:app/services/payments.py†L205-L392】【F:app/services/usage.py†L97-L246】
-- PSP & secrets : démarrage bloquant sans `PSP_WEBHOOK_SECRET`, HMAC SHA-256 + timestamp ±5 min et persistance idempotente des événements.【F:app/main.py†L23-L64】【F:app/services/psp_webhooks.py†L21-L109】
-- Audit : toutes les mutations critiques écrivent dans `AuditLog`, mais les actions back-office utilisent encore des acteurs génériques (cf. risques).【F:app/utils/audit.py†L10-L30】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L44-L118】
-- **Encadré DEV_API_KEY** : la clé legacy n’est acceptée que lorsque `DEV_API_KEY_ALLOWED` est vrai (ENV=`dev/local`), sinon la dépendance retourne `LEGACY_KEY_FORBIDDEN` (401) sans toucher à la base. L’usage en dev génère un audit dédié `LEGACY_API_KEY_USED`.【F:app/security.py†L42-L106】【F:app/utils/apikey.py†L31-L48】
+AuthN/Z: require_scope dependencies enforce API-key scopes per router; actor_from_api_key standardizes AuditLog.actor.
 
-## G. Observability & ops
-- Logging structuré et Sentry optionnel via `app/config.py`; CORS et métriques exposées par la configuration centrale.【F:app/main.py†L52-L78】【F:app/config.py†L32-L71】
-- Lifespan unique (`lifespan` context manager) : initialisation DB et scheduler encapsulés sans `@app.on_event` legacy.【F:app/main.py†L23-L74】
-- Scheduler optionnel (`SCHEDULER_ENABLED`) avec avertissement clair lorsqu’il est activé hors dev, rappelant la contrainte “un seul runner”.【F:app/main.py†L33-L74】
+Input validation: Pydantic models constrain fields (length, regex, Decimal). AI fields absent from ProofCreate, so clients cannot forge ai_risk_level.
+
+File/proof validation: Photo proofs check EXIF timestamp, geofence distance (Haversine), and metadata presence; doc proofs remain manual with advisory checks.
+
+Secrets/config: Settings loads PSP secrets (current + next), OpenAI key, OCR flags, and toggles for ALLOW_DB_CREATE_ALL; .env.example documents defaults with AI/OCR disabled.
+
+Audit/logging: AuditLog entries created on proof submit/decision, escrow updates, spend, transactions, PSP events; payload sanitization masks obvious PII before persistence.
+
+## G. Observability & operations
+Logging pipeline centralizes formatting and levels; optional Prometheus exporter (starlette_exporter) and Sentry DSN in config.
+
+HTTP errors standardized via error_response helpers and FastAPI exception handlers.
+
+Alembic-managed schema with explicit guard against Base.metadata.create_all() unless APP_ENV is dev/test and ALLOW_DB_CREATE_ALL=True.
+
+Deployment: .env.example spells out PSP/AI/OCR secrets; README references uvicorn entrypoint; tests cover migrations to ensure reproducibility.
 
 ## H. Risk register (prioritized)
 | ID | Component | Risk | Impact | Likelihood | Priority | Recommendation |
 | --- | --- | --- | --- | --- | --- | --- |
-| R1 | Audit back-office | Acteurs `admin/system` dans `CREATE_USER`, `SPEND_*`, `ALLOWLIST_ADD` empêchent de rattacher l’action à une clé API réelle (traçabilité/AML).【F:app/routers/users.py†L37-L44】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L44-L96】 | Élevé | Élevée | P1 | Propager l’identifiant/prefix de la clé API via `log_audit` (ex : `actor=f"apikey:{key.id}"`). |
-| R2 | Allow usage | Les doublons `AllowedUsage` renvoient `status="exists"` sans audit, masquant des tentatives répétées (fraude ou erreur).【F:app/services/spend.py†L184-L225】 | Moyen | Moyenne | P1 | Émettre un audit `SPEND_ALLOW_EXISTS` et, idéalement, exposer un compteur Prometheus. |
-| R3 | Purchases | `/spend/purchases` n’impose pas `Idempotency-Key`; un retry réseau peut créer un achat double avant réconciliation.【F:app/routers/spend.py†L62-L74】【F:app/services/spend.py†L229-L413】 | Critique | Moyenne | P1 | Rendre l’en-tête obligatoire (alignement sur `/spend`) ou dériver une clé déterministe signée. |
-| R4 | Scheduler | APScheduler en mémoire risque d’être lancé sur plusieurs pods si le flag est activé partout (pas de lock distribué).【F:app/main.py†L33-L74】 | Moyen | Faible | P2 | Activer `SCHEDULER_ENABLED` sur un seul runner et prévoir un job store partagé (Redis/SQL) avant montée en charge. |
-| R5 | Allowed payees | `add_allowed_payee` trace `actor="system"` sans référence à la clé support à l’origine de la modification, compliquant les enquêtes.【F:app/services/usage.py†L40-L110】 | Moyen | Faible | P2 | Passer l’identifiant API à `log_audit` depuis le router (ou enrichir `actor`). |
+| R1 | /spend/purchases | Clients without Idempotency-Key now receive 400, potentially breaking legacy integrations. | Failed purchase retries → support load | Medium | P0 | Communicate rollout, consider transitional grace (accept header optional but warn) or automated client updates. |
+| R2 | PSP webhook | Secret rotation supported but operational process absent; stale PSP_WEBHOOK_SECRET_NEXT leaves only one valid secret. | Compromised secret lets attacker fake SETTLED events | Medium | P0 | Document rotation runbook, add monitoring when both secrets missing, log warnings when NEXT unused past SLA. |
+| R3 | AuditLog sanitization | Fields outside SENSITIVE_KEYS (e.g., supplier city, merchant label) remain unmasked; leaked logs can still reveal PII. | GDPR/privacy exposure | Low | P0 | Expand sanitizer or invert approach (explicit allowlist). Add regression tests verifying new masks. |
+| R4 | Lifespan create_all | Mis-set ALLOW_DB_CREATE_ALL in staging/prod still enables runtime schema creation, bypassing Alembic. | Schema drift, missing migrations | Low | P0 | Enforce env guard (fail fast when non-dev env + flag true) or compile-time check in CI/CD. |
+| R5 | AI override governance | Reviewers can approve warning/suspect proofs with a note, but there is no secondary approval or dashboard to review overrides. | AI escalations ignored without oversight | Medium | P0 | Introduce queue/report for overrides + optional dual approval, log metrics for overrides vs AI risk. |
+| IA-1 | AI sanitizer | Fully masking supplier_name/beneficiary_name deprives AI of matching signals. | False positives/negatives | Low | P1 | Mask partially (keep few characters) or pass hashed versions plus expected hash for comparison. |
+| OCR-1 | Invoice OCR | Feature flag might be toggled on even though _call_external_ocr_provider returns {}. | False belief in OCR coverage | Low | P1 | Auto-disable when provider none or raise startup warning; add provider implementation. |
+| OBS-1 | Async tests | test_legacy_key_rejected_outside_dev skipped (async) so regression could slip. | Missed security regression | Low | P2 | Install pytest-asyncio or rewrite test sync to keep coverage. |
 
-## I. Roadmap to MVP-ready
-- P0 :
-  - Aucun P0 ouvert après verrouillage RBAC, mais surveiller toute régression sur `/spend/allowed` lors des évolutions futures.【F:app/routers/spend.py†L84-L105】
-- P1 :
-  - Enrichir `log_audit` avec l’identifiant de la clé API pour les actions back-office (R1, R5).【F:app/utils/audit.py†L10-L30】
-  - Ajouter un audit et des métriques sur les collisions `spend/allow`; rendre `Idempotency-Key` obligatoire pour `/spend/purchases` (R2, R3).【F:app/services/spend.py†L184-L225】【F:app/routers/spend.py†L62-L74】
-- P2 :
-  - Préparer un job store partagé ou un verrou distribué pour APScheduler avant déploiement multi-pods (R4).【F:app/main.py†L33-L74】
-  - Étendre l’audit payee pour inclure la clé support ayant initié l’opération (R5).【F:app/services/usage.py†L40-L110】
+## I. AI Proof Advisor, OCR & risk scoring (dedicated section)
+### I.1 AI architecture
+Config toggles: AI_PROOF_ADVISOR_ENABLED=False by default, provider/model/timeouts configurable via Settings. OPENAI_API_KEY optional; fallback result returned when unset.
 
-**Verdict : GO conditionnel** — viser l’enrichissement des audits et l’idempotence achats avant ouverture à de nouveaux partenaires.
+Modules:
 
-## Evidence
-- `alembic current --verbose`【823cf6†L1-L4】
-- `alembic heads`【dae9a3†L1-L2】
-- `pytest -q`【d1eb61†L1-L10】
+ai_proof_flags.py: exposes ai_enabled(), ai_model(), ai_timeout_seconds() for deterministic gating.
+
+aio_proof_advisor.py: contains long-lived prompt, context builder, sanitizer, OpenAI call with timeout + try/except + fallback JSON.
+
+document_checks.py: backend comparisons feeding IA context.
+
+invoice_ocr.py: optional metadata enrichment before backend checks.
+
+### I.2 AI integration into proof flows
+PHOTO branch: After EXIF/geofence validation and only when auto_approve=True, AI is called; metadata gains ai_assessment, and Proof.ai_* columns persist the verdict. Exceptions log but do not block.
+
+NON-PHOTO branch: Always manual review; AI advisory triggered if flag enabled. compute_document_backend_checks output is passed to the AI. AI failures are logged and ignored, keeping behavior unchanged when disabled.
+
+Reviewer governance: /proofs/{id}/decision enforces note when approving warnings/suspects, stamping ai_reviewed_by/at.
+
+### I.3 OCR & backend_checks
+OCR hook runs immediately after metadata_payload = dict(payload.metadata or {}) for document proof types, enriching metadata without overwriting non-empty user input.
+
+_call_external_ocr_provider currently a stub returning {} unless a real provider is wired; fails gracefully.
+
+compute_document_backend_checks synthesizes diffs for amount/currency, IBAN last4, invoice date ranges, and supplier names; these signals feed the AI context for better scoring.
+
+### I.4 AI/OCR-specific risks
+| ID | Domain (AI/OCR) | Risk | Impact | Likelihood | Priority | Recommended fix |
+| --- | --- | --- | --- | --- | --- | --- |
+| AI-OVR | AI override | Reviewers can override AI warnings with minimal oversight. | Fraud slipping through | Medium | P0 | Add dashboard + dual-approval or escalate to admin when overriding suspect proofs. |
+| AI-DATA | Sanitization | Full masking of supplier/beneficiary names prevents AI from spotting mismatches. | Reduced AI accuracy | Low | P1 | Mask partially or provide hashed comparison tokens. |
+| OCR-STUB | OCR provider | Flag could be enabled despite stub returning {}. | False sense of validation | Low | P1 | Add startup warning or auto-disable when provider none. |
+| AI-TIMEOUT | Timeout/latency | Single timeout setting (12s) may cause long HTTP requests under load. | Endpoint latency spikes | Low | P2 | Instrument latency metrics, tune timeout, and add circuit breaker/backoff. |
+
+## J. Roadmap to a staging-ready MVP
+P0 checklist
+
+Communicate & enforce Idempotency-Key requirement on /spend/purchases, including temporary dual-mode acceptance or client SDK update (R1).
+
+Define PSP secret rotation SOP (schedules, alerts when NEXT secret unused) and validate both secrets configured in staging/prod (R2).
+
+Expand sanitize_payload_for_audit coverage or switch to allowlisting; add regression tests for new keys (R3).
+
+Fail fast when ALLOW_DB_CREATE_ALL=True outside {dev,local,test} to prevent schema drift; add CI guard (R4).
+
+Build reviewer oversight for AI overrides (e.g., admin queue, second approval) so warning/suspect approvals are traceable (R5).
+
+P1 checklist
+
+Implement a real OCR provider or auto-disable when INVOICE_OCR_PROVIDER=none (OCR-1).
+
+Add partial masking rather than full redaction for supplier/beneficiary names passed to AI (AI-DATA).
+
+Consolidate Idempotency-Key utilities and ensure every money-moving endpoint shares the same retry semantics.
+
+Add Prometheus metrics for AI/OCR latency and fallback counts.
+
+P2 checklist
+
+Provide a mock AI mode for local/testing without OpenAI.
+
+Extend async test coverage by adopting pytest-asyncio for coroutine tests.
+
+Automate PSP webhook secret rotation via scheduled job or deployment hook.
+
+Verdict: GO for a staging with 10 real users, contingent on executing the P0 checklist (communication on idempotence, PSP rotation SOP, broader audit sanitization, hard guard on create_all, and AI override oversight).
+
+## K. Verification evidence
+Environment prep & dependencies: python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt (chunk 69592d).
+
+Migrations: alembic upgrade head (chunk def6b5), alembic current (chunk 3ea749), alembic heads (chunk 027c09), alembic history --verbose (chunk 867746).
+
+Tests: pytest -q → 67 passed, 1 skipped, 2 warnings (pydantic Config deprecation, async test skipped) (chunk 02faba).
+
+Key code references via rg/sed:
+
+app/services/proofs.py lines ≈30–220 for OCR hook, AI advisory, and metadata persistence (chunks f4e95a, 685a2f).
+
+app/services/ai_proof_advisor.py for prompt, sanitation, fallback logic (chunks f6e88a, ddf39c).
+
+app/services/invoice_ocr.py for standardized metadata format (chunk f86ca0).
+
+app/services/document_checks.py for backend signal computation (chunk ff4e20).
+
+app/utils/audit.py for payload masking and actor utilities (chunk bb9753).

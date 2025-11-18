@@ -21,6 +21,7 @@ from app.models import (
     PaymentStatus,
 )
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -265,10 +266,12 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
                 action="EXECUTE_PAYOUT",
                 entity="Payment",
                 entity_id=payment.id,
-                data_json={
-                    "idempotency_key": payment.idempotency_key,
-                    "amount": str(payment.amount),
-                },
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "idempotency_key": payment.idempotency_key,
+                        "amount": str(payment.amount),
+                    }
+                ),
                 at=utcnow(),
             )
         )
@@ -348,12 +351,14 @@ def finalize_payment_settlement(
             action="PAYMENT_SETTLED",
             entity="Payment",
             entity_id=payment.id,
-            data_json={
-                "escrow_id": payment.escrow_id,
-                "amount": str(payment.amount),
-                "source": source,
-                **(extra or {}),
-            },
+            data_json=sanitize_payload_for_audit(
+                {
+                    "escrow_id": payment.escrow_id,
+                    "amount": str(payment.amount),
+                    "source": source,
+                    **(extra or {}),
+                }
+            ),
             at=now,
         )
     )
@@ -395,7 +400,7 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
                     action="ESCROW_RELEASED",
                     entity="EscrowAgreement",
                     entity_id=escrow_id,
-                    data_json={"source": "_finalize_escrow_if_paid"},
+                    data_json=sanitize_payload_for_audit({"source": "_finalize_escrow_if_paid"}),
                     at=now,
                 )
             )

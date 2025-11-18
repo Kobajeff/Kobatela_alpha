@@ -96,6 +96,40 @@ async def test_psp_webhook_settles_payment(client, db_session):
 
 
 @pytest.mark.anyio
+async def test_psp_webhook_accepts_next_secret(client):
+    settings = get_settings()
+    original_secret = settings.psp_webhook_secret
+    original_next = settings.psp_webhook_secret_next
+    try:
+        settings.psp_webhook_secret = None
+        settings.psp_webhook_secret_next = "next-secret"
+        payload = {"type": "payment.settled"}
+        body = json.dumps(payload).encode()
+        timestamp = str(utcnow().timestamp())
+        payload_to_sign = timestamp.encode() + b"." + body
+        signature = hmac.new(
+            settings.psp_webhook_secret_next.encode(),
+            payload_to_sign,
+            hashlib.sha256,
+        ).hexdigest()
+
+        response = await client.post(
+            "/psp/webhook",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-PSP-Signature": signature,
+                "X-PSP-Timestamp": timestamp,
+                "X-PSP-Event-Id": "evt-rot", 
+            },
+        )
+        assert response.status_code == 200
+    finally:
+        settings.psp_webhook_secret = original_secret
+        settings.psp_webhook_secret_next = original_next
+
+
+@pytest.mark.anyio
 async def test_psp_webhook_invalid_signature(client):
     """An invalid signature should be rejected."""
 

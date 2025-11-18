@@ -6,21 +6,24 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models.user import User
 from app.schemas.user import UserCreate, UserRead
-from app.models.api_key import ApiScope
-from app.security import require_api_key, require_scope
+from app.models.api_key import ApiKey, ApiScope
+from app.security import require_scope
+from app.utils.audit import actor_from_api_key, log_audit
 from app.utils.errors import error_response
-from app.utils.audit import log_audit
 
-router = APIRouter(prefix="/users", tags=["users"], dependencies=[Depends(require_api_key)])
+router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.post(
     "",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
-def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
+def create_user(
+    payload: UserCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+) -> User:
     """Create a new user."""
 
     user = User(**payload.model_dump())
@@ -34,9 +37,10 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
             detail=error_response("USER_CREATE_FAILED", "Could not create user."),
         ) from exc
 
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
     log_audit(
         db,
-        actor="admin",
+        actor=actor,
         action="CREATE_USER",
         entity="User",
         entity_id=user.id,
@@ -51,9 +55,12 @@ def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
 @router.get(
     "/{user_id}",
     response_model=UserRead,
-    dependencies=[Depends(require_scope({ApiScope.admin, ApiScope.support}))],
 )
-def get_user(user_id: int, db: Session = Depends(get_db)) -> User:
+def get_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    _api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+) -> User:
     """Retrieve a user by identifier."""
 
     user = db.get(User, user_id)

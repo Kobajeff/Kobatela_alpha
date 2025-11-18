@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     app_env: str = ENV
     database_url: str = "sqlite:///kobatella.db"
     psp_webhook_secret: str | None = None
+    psp_webhook_secret_next: str | None = None
+    psp_webhook_max_drift_seconds: int = 300
     SECRET_KEY: str = "change-me"
     DEV_API_KEY: str | None = Field(
         default=DEV_API_KEY,
@@ -48,11 +50,29 @@ class Settings(BaseSettings):
     SENTRY_DSN: str | None = None
     PROMETHEUS_ENABLED: bool = True
 
+    # --- AI Proof Advisor (MVP) ------------------------------------------
+    AI_PROOF_ADVISOR_ENABLED: bool = False
+    AI_PROOF_ADVISOR_PROVIDER: str = "openai"
+    AI_PROOF_ADVISOR_MODEL: str = "gpt-5.1-mini"
+    AI_PROOF_MAX_IMAGE_RESOLUTION_X: int = 1600
+    AI_PROOF_MAX_IMAGE_RESOLUTION_Y: int = 1200
+    AI_PROOF_MAX_PDF_PAGES: int = 5
+    AI_PROOF_TIMEOUT_SECONDS: int = 12
+    OPENAI_API_KEY: str | None = None
+
+    # --- Invoice OCR -----------------------------------------------------
+    INVOICE_OCR_ENABLED: bool = False
+    INVOICE_OCR_PROVIDER: str = "none"
+    INVOICE_OCR_API_KEY: str | None = None
+
+    # --- Lifespan safeguards --------------------------------------------
+    ALLOW_DB_CREATE_ALL: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env", env_prefix="", env_file_encoding="utf-8"
     )
 
-    @field_validator("psp_webhook_secret")
+    @field_validator("psp_webhook_secret", "psp_webhook_secret_next")
     @classmethod
     def _strip_empty_secret(cls, value: str | None) -> str | None:
         """Normalise empty webhook secrets to ``None`` for easier validation."""
