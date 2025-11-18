@@ -30,17 +30,15 @@ def decide_proof(
     proof_id: int,
     decision: ProofDecision,
     db: Session = Depends(get_db),
-    api_key: ApiKey = Depends(require_scope({ApiScope.sender})),
+    api_key: ApiKey = Depends(require_scope({ApiScope.support, ApiScope.admin})),
 ):
     """Approve or reject a proof submission."""
 
-    normalized = decision.decision.lower()
     actor = actor_from_api_key(api_key, fallback="apikey:unknown")
-    if normalized == "approved":
-        return proofs_service.approve_proof(db, proof_id, note=decision.note, actor=actor)
-    if normalized == "rejected":
-        return proofs_service.reject_proof(db, proof_id, note=decision.note, actor=actor)
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=error_response("INVALID_DECISION", "Decision must be either approved or rejected."),
+    return proofs_service.decide_proof(
+        db,
+        proof_id,
+        decision=decision.decision,
+        note=decision.note,
+        actor=actor,
     )

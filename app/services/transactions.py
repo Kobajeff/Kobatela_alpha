@@ -14,6 +14,7 @@ from app.models.transaction import Transaction, TransactionStatus
 from app.schemas.transaction import AllowlistCreate, CertificationCreate, TransactionCreate
 from app.services import alerts as alert_service
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -37,7 +38,7 @@ def _audit(
             action=action,
             entity=entity,
             entity_id=entity_id,
-            data_json=data or {},
+            data_json=sanitize_payload_for_audit(data or {}),
             at=utcnow(),
         )
     )

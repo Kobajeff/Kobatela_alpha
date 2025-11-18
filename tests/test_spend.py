@@ -11,6 +11,10 @@ from app.schemas.spend import PurchaseCreate
 from app.services import spend as spend_service
 
 
+def _idem_headers(base_headers: dict[str, str]) -> dict[str, str]:
+    return {**base_headers, "Idempotency-Key": str(uuid4())}
+
+
 @pytest.mark.anyio("asyncio")
 async def test_purchase_requires_authorization(client, auth_headers):
     sender = await client.post(
@@ -46,7 +50,7 @@ async def test_purchase_requires_authorization(client, auth_headers):
             "amount": 42.0,
             "currency": "USD",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
     assert unauthorized.status_code == 403
     assert unauthorized.json()["error"]["code"] == "MANDATE_REQUIRED"
@@ -76,7 +80,7 @@ async def test_purchase_requires_authorization(client, auth_headers):
             "amount": 10.0,
             "currency": "USD",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
     assert unauthorized_usage.status_code == 403
     assert unauthorized_usage.json()["error"]["code"] == "UNAUTHORIZED_USAGE"
@@ -98,7 +102,7 @@ async def test_purchase_requires_authorization(client, auth_headers):
             "amount": 42.0,
             "currency": "USD",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
     assert purchase.status_code == 201
     assert purchase.json()["status"] == "COMPLETED"
@@ -193,6 +197,24 @@ async def test_purchase_by_category_and_idempotency(client, auth_headers):
     assert retry.json()["id"] == purchase_id
 
 
+@pytest.mark.anyio("asyncio")
+async def test_purchase_requires_idempotency_header(client, auth_headers):
+    payload = {
+        "sender_id": 1,
+        "beneficiary_id": 2,
+        "merchant_id": 3,
+        "amount": 15.0,
+        "currency": "USD",
+    }
+
+    response = await client.post(
+        "/spend/purchases",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+
+
 def test_purchase_amount_persisted_as_decimal(db_session):
     """The ORM should materialise purchase amounts as Decimal objects."""
 
@@ -244,7 +266,9 @@ def test_purchase_amount_normalized_to_two_decimals(db_session):
         amount=Decimal("33.335"),
         currency="USD",
     )
-    purchase = spend_service.create_purchase(db_session, payload, idempotency_key=None)
+    purchase = spend_service.create_purchase(
+        db_session, payload, idempotency_key=str(uuid4())
+    )
     db_session.refresh(mandate)
 
     assert purchase.amount == Decimal("33.34")

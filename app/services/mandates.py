@@ -14,6 +14,7 @@ from app.models.spend import Merchant, SpendCategory
 from app.models.usage_mandate import UsageMandate, UsageMandateStatus
 from app.models.user import User
 from app.schemas.mandates import UsageMandateCreate
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -35,7 +36,7 @@ def _audit_mandate(
         action=action,
         entity="UsageMandate",
         entity_id=mandate_id,
-        data_json=data or {},
+        data_json=sanitize_payload_for_audit(data or {}),
         at=utcnow(),
     )
     db.add(audit)

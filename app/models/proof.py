@@ -31,5 +31,7 @@ class Proof(Base):
     ai_flags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     ai_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_reviewed_by: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    ai_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     milestone = relationship("Milestone", back_populates="proofs")

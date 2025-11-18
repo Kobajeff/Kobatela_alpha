@@ -29,6 +29,7 @@ from app.services.ai_proof_flags import ai_enabled
 from app.services.document_checks import compute_document_backend_checks
 from app.services.invoice_ocr import enrich_metadata_with_invoice_ocr
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -296,7 +297,7 @@ def submit_proof(
             action="SUBMIT_PROOF",
             entity="Proof",
             entity_id=proof.id,
-            data_json=payload.model_dump(),
+            data_json=sanitize_payload_for_audit(payload.model_dump()),
             at=utcnow(),
         )
     )
@@ -350,6 +351,52 @@ def submit_proof(
 
 
 
+def decide_proof(
+    db: Session,
+    proof_id: int,
+    *,
+    decision: str,
+    note: str | None = None,
+    actor: str | None = None,
+) -> Proof:
+    """Approve or reject a proof with AI governance safeguards."""
+
+    normalized = (decision or "").strip().lower()
+    if normalized in {"approve", "approved"}:
+        target = "approved"
+    elif normalized in {"reject", "rejected"}:
+        target = "rejected"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response("INVALID_DECISION", "Decision must be approve or reject."),
+        )
+
+    proof = _get_proof_or_404(db, proof_id)
+    ai_flagged = (proof.ai_risk_level or "").lower() in {"warning", "suspect"}
+    if target == "approved" and ai_flagged:
+        if note is None or not note.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_response(
+                    "AI_REVIEW_NOTE_REQUIRED",
+                    "A justification note is required to approve a proof flagged as warning or suspect by AI.",
+                ),
+            )
+
+    if target == "approved":
+        updated = approve_proof(db, proof_id, note=note, actor=actor)
+    else:
+        updated = reject_proof(db, proof_id, note=note, actor=actor)
+
+    updated.ai_reviewed_by = actor or "system"
+    updated.ai_reviewed_at = utcnow()
+    db.add(updated)
+    db.commit()
+    db.refresh(updated)
+    return updated
+
+
 def approve_proof(
     db: Session, proof_id: int, *, note: str | None = None, actor: str | None = None
 ) -> Proof:
@@ -388,7 +435,7 @@ def approve_proof(
             action="APPROVE_PROOF",
             entity="Proof",
             entity_id=proof.id,
-            data_json={"proof_id": proof.id, "note": note},
+            data_json=sanitize_payload_for_audit({"proof_id": proof.id, "note": note}),
             at=utcnow(),
         )
     )
@@ -457,7 +504,7 @@ def reject_proof(
             action="REJECT_PROOF",
             entity="Proof",
             entity_id=proof.id,
-            data_json={"proof_id": proof.id, "note": note},
+            data_json=sanitize_payload_for_audit({"proof_id": proof.id, "note": note}),
             at=utcnow(),
         )
     )
@@ -518,4 +565,4 @@ def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:
             logger.info("Escrow closed after all milestones paid", extra={"escrow_id": escrow.id})
 
 
-__all__ = ["submit_proof", "approve_proof", "reject_proof"]
+__all__ = ["submit_proof", "approve_proof", "reject_proof", "decide_proof"]

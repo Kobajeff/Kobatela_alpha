@@ -12,6 +12,7 @@ from app.models.audit import AuditLog
 from app.models.escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
 from app.schemas.escrow import EscrowCreate, EscrowDepositCreate, EscrowActionPayload
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -52,7 +53,7 @@ def _audit(
             action=action,
             entity="EscrowAgreement",
             entity_id=escrow.id,
-            data_json=data,
+            data_json=sanitize_payload_for_audit(data),
             at=utcnow(),
         )
     )

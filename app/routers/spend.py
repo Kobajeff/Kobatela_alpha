@@ -80,10 +80,18 @@ def allow_usage(
 def create_purchase(
     payload: PurchaseCreate,
     db: Session = Depends(get_db),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
     api_key: ApiKey = Depends(require_scope({ApiScope.sender, ApiScope.admin})),
 ):
     actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Idempotency-Key header is required for this endpoint.",
+            ),
+        )
     return spend_service.create_purchase(
         db, payload, idempotency_key=idempotency_key, actor=actor
     )

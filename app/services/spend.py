@@ -19,7 +19,7 @@ from app.schemas.spend import (
 )
 from app.services.mandates import audit_mandate_event
 from app.services.idempotency import get_existing_by_key
-from app.utils.audit import log_audit
+from app.utils.audit import log_audit, sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -253,11 +253,20 @@ def create_purchase(
 ) -> Purchase:
     """Create an authorized purchase if the usage is allowed."""
 
-    if idempotency_key:
-        existing = get_existing_by_key(db, Purchase, idempotency_key)
-        if existing:
-            logger.info("Idempotent purchase reused", extra={"purchase_id": existing.id})
-            return existing
+    normalized_key = (idempotency_key or "").strip()
+    if not normalized_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /spend/purchases.",
+            ),
+        )
+
+    existing = get_existing_by_key(db, Purchase, normalized_key)
+    if existing:
+        logger.info("Idempotent purchase reused", extra={"purchase_id": existing.id})
+        return existing
 
     merchant = db.get(Merchant, payload.merchant_id)
     if merchant is None:
@@ -387,7 +396,7 @@ def create_purchase(
         amount=amount,
         currency=payload.currency,
         status=PurchaseStatus.COMPLETED,
-        idempotency_key=idempotency_key,
+        idempotency_key=normalized_key,
     )
     db.add(purchase)
 
@@ -395,14 +404,13 @@ def create_purchase(
         db.flush()
     except IntegrityError:
         db.rollback()
-        if idempotency_key:
-            existing = get_existing_by_key(db, Purchase, idempotency_key)
-            if existing:
-                logger.info(
-                    "Idempotent purchase reused after race",
-                    extra={"purchase_id": existing.id},
-                )
-                return existing
+        existing = get_existing_by_key(db, Purchase, normalized_key)
+        if existing:
+            logger.info(
+                "Idempotent purchase reused after race",
+                extra={"purchase_id": existing.id},
+            )
+            return existing
         raise
 
     audit_mandate_event(
@@ -424,10 +432,12 @@ def create_purchase(
         action="CREATE_PURCHASE",
         entity="Purchase",
         entity_id=purchase.id,
-        data_json={
-            **payload.model_dump(mode="json"),
-            "resolved_beneficiary_id": beneficiary_id,
-        },
+        data_json=sanitize_payload_for_audit(
+            {
+                **payload.model_dump(mode="json"),
+                "resolved_beneficiary_id": beneficiary_id,
+            }
+        ),
         at=utcnow(),
     )
     db.add(audit)

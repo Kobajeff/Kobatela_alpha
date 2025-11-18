@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     app_env: str = ENV
     database_url: str = "sqlite:///kobatella.db"
     psp_webhook_secret: str | None = None
+    psp_webhook_secret_next: str | None = None
+    psp_webhook_max_drift_seconds: int = 300
     SECRET_KEY: str = "change-me"
     DEV_API_KEY: str | None = Field(
         default=DEV_API_KEY,
@@ -63,11 +65,14 @@ class Settings(BaseSettings):
     INVOICE_OCR_PROVIDER: str = "none"
     INVOICE_OCR_API_KEY: str | None = None
 
+    # --- Lifespan safeguards --------------------------------------------
+    ALLOW_DB_CREATE_ALL: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env", env_prefix="", env_file_encoding="utf-8"
     )
 
-    @field_validator("psp_webhook_secret")
+    @field_validator("psp_webhook_secret", "psp_webhook_secret_next")
     @classmethod
     def _strip_empty_secret(cls, value: str | None) -> str | None:
         """Normalise empty webhook secrets to ``None`` for easier validation."""

@@ -30,10 +30,15 @@ class ProofRead(BaseModel):
     ai_flags: list[str] | None = None
     ai_explanation: str | None = None
     ai_checked_at: datetime | None = None
+    ai_reviewed_by: str | None = None
+    ai_reviewed_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class ProofDecision(BaseModel):
-    decision: str = Field(pattern="^(approved|rejected)$", description="Decision outcome")
+    decision: str = Field(
+        pattern="^(approve|approved|reject|rejected)$",
+        description="Decision outcome",
+    )
     note: str | None = None

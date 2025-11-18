@@ -19,6 +19,7 @@ from app.utils.errors import error_response
 settings = get_settings()
 logger = get_logger(__name__)
 scheduler: AsyncIOScheduler | None = None
+ALLOWED_CREATE_ENV = {"dev", "local", "test"}
 
 # -------- Lifespan (nouveau mécanisme) --------
 @asynccontextmanager
@@ -28,13 +29,18 @@ async def lifespan(app: FastAPI):
     if settings.psp_webhook_secret is None:
         raise RuntimeError("PSP_WEBHOOK_SECRET manquant : configurez la variable d'environnement ou le fichier .env")
     db.init_engine()  # sync, idempotent
-    if settings.app_env.lower() in {"dev", "local", "test"}:
-        logger.info("Running Base.metadata.create_all() in %s", settings.app_env)
+    env_lower = settings.app_env.lower()
+    if settings.ALLOW_DB_CREATE_ALL and env_lower in ALLOWED_CREATE_ENV:
+        logger.warning(
+            "Running Base.metadata.create_all() because APP_ENV=%s and ALLOW_DB_CREATE_ALL=True",
+            settings.app_env,
+        )
         db.create_all()
     else:
         logger.info(
-            "Skipping create_all in ENV=%s; apply Alembic migrations before startup.",
+            "Skipping create_all(); use Alembic migrations. APP_ENV=%s, ALLOW_DB_CREATE_ALL=%s",
             settings.app_env,
+            settings.ALLOW_DB_CREATE_ALL,
         )
     # NOTE: In multi-replica deployments, enable SCHEDULER_ENABLED=true on ONE runner only (others=false).
     # For 1.0.0 consider external cron/worker or APScheduler with a distributed job store/lock.
