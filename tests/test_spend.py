@@ -5,7 +5,10 @@ from decimal import Decimal
 
 import pytest
 
-from app.models import Merchant, Purchase, PurchaseStatus, User
+from app.models import Merchant, Purchase, PurchaseStatus, UsageMandate, UsageMandateStatus, User
+from app.models.audit import AuditLog
+from app.schemas.spend import PurchaseCreate
+from app.services import spend as spend_service
 
 
 @pytest.mark.anyio("asyncio")
@@ -212,3 +215,54 @@ def test_purchase_amount_persisted_as_decimal(db_session):
 
     assert isinstance(purchase.amount, Decimal)
     assert purchase.amount == Decimal("42.17")
+
+
+def test_purchase_amount_normalized_to_two_decimals(db_session):
+    sender = User(username="spender", email="spender@example.com")
+    beneficiary = User(username="spender-benef", email="spender-benef@example.com")
+    merchant = Merchant(name="Rounding Shop", is_certified=True)
+    db_session.add_all([sender, beneficiary, merchant])
+    db_session.flush()
+
+    mandate = UsageMandate(
+        sender_id=sender.id,
+        beneficiary_id=beneficiary.id,
+        total_amount=Decimal("100.00"),
+        currency="USD",
+        allowed_category_id=None,
+        allowed_merchant_id=merchant.id,
+        expires_at=datetime.now(tz=UTC) + timedelta(days=5),
+        status=UsageMandateStatus.ACTIVE,
+    )
+    db_session.add(mandate)
+    db_session.commit()
+
+    payload = PurchaseCreate(
+        sender_id=sender.id,
+        beneficiary_id=beneficiary.id,
+        merchant_id=merchant.id,
+        amount=Decimal("33.335"),
+        currency="USD",
+    )
+    purchase = spend_service.create_purchase(db_session, payload, idempotency_key=None)
+    db_session.refresh(mandate)
+
+    assert purchase.amount == Decimal("33.34")
+    assert mandate.total_spent == Decimal("33.34")
+
+
+@pytest.mark.anyio("asyncio")
+async def test_spend_category_audit_records_api_actor(client, admin_headers, db_session):
+    payload = {"code": f"CAT-{uuid4().hex[:6]}", "label": "Monitored"}
+    resp = await client.post("/spend/categories", json=payload, headers=admin_headers)
+    assert resp.status_code == 201
+
+    db_session.expire_all()
+    audit = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "SPEND_CATEGORY_CREATED")
+        .order_by(AuditLog.id.desc())
+        .first()
+    )
+    assert audit is not None
+    assert audit.actor.startswith("apikey:")

@@ -57,7 +57,9 @@ def _audit(
         )
     )
 
-def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
+def create_escrow(
+    db: Session, payload: EscrowCreate, *, actor: str | None = None
+) -> EscrowAgreement:
     """Create a new escrow agreement."""
 
     agreement = EscrowAgreement(
@@ -73,7 +75,7 @@ def create_escrow(db: Session, payload: EscrowCreate) -> EscrowAgreement:
     db.flush()
     _audit(
         db,
-        actor="client",
+        actor=actor or "client",
         action="ESCROW_CREATED",
         escrow=agreement,
         data={
@@ -98,7 +100,14 @@ def _total_deposited(db: Session, escrow_id: int) -> Decimal:
     return Decimal(value)
 
 
-def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempotency_key: str | None) -> EscrowAgreement:
+def deposit(
+    db: Session,
+    escrow_id: int,
+    payload: EscrowDepositCreate,
+    *,
+    idempotency_key: str | None,
+    actor: str | None = None,
+) -> EscrowAgreement:
     """Deposit funds into an escrow agreement."""
 
     agreement = db.get(EscrowAgreement, escrow_id)
@@ -138,7 +147,7 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
         db.add(event)
         _audit(
             db,
-            actor="system",
+            actor=actor or "system",
             action="ESCROW_DEPOSITED",
             escrow=agreement,
             data={
@@ -165,7 +174,9 @@ def deposit(db: Session, escrow_id: int, payload: EscrowDepositCreate, *, idempo
         raise
 
 
-def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) -> EscrowAgreement:
+def mark_delivered(
+    db: Session, escrow_id: int, payload: EscrowActionPayload, *, actor: str | None = None
+) -> EscrowAgreement:
     agreement = _get_escrow_or_404(db, escrow_id)
 
     agreement.status = EscrowStatus.RELEASABLE
@@ -178,7 +189,7 @@ def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) ->
     db.add(event)
     _audit(
         db,
-        actor="provider",
+        actor=actor or "provider",
         action="ESCROW_PROOF_UPLOADED",
         escrow=agreement,
         data={"status": agreement.status.value, "proof_url": payload.proof_url},
@@ -189,7 +200,13 @@ def mark_delivered(db: Session, escrow_id: int, payload: EscrowActionPayload) ->
     return agreement
 
 
-def client_approve(db: Session, escrow_id: int, payload: EscrowActionPayload | None = None) -> EscrowAgreement:
+def client_approve(
+    db: Session,
+    escrow_id: int,
+    payload: EscrowActionPayload | None = None,
+    *,
+    actor: str | None = None,
+) -> EscrowAgreement:
     agreement = _get_escrow_or_404(db, escrow_id)
 
     agreement.status = EscrowStatus.RELEASED
@@ -202,7 +219,7 @@ def client_approve(db: Session, escrow_id: int, payload: EscrowActionPayload | N
     db.add(event)
     _audit(
         db,
-        actor="client",
+        actor=actor or "client",
         action="ESCROW_RELEASED",
         escrow=agreement,
         data={"status": agreement.status.value, "note": payload.note if payload else None},
@@ -213,7 +230,13 @@ def client_approve(db: Session, escrow_id: int, payload: EscrowActionPayload | N
     return agreement
 
 
-def client_reject(db: Session, escrow_id: int, payload: EscrowActionPayload | None = None) -> EscrowAgreement:
+def client_reject(
+    db: Session,
+    escrow_id: int,
+    payload: EscrowActionPayload | None = None,
+    *,
+    actor: str | None = None,
+) -> EscrowAgreement:
     agreement = _get_escrow_or_404(db, escrow_id)
 
     # Idempotence : si déjà terminal, on renvoie tel quel
@@ -237,7 +260,7 @@ def client_reject(db: Session, escrow_id: int, payload: EscrowActionPayload | No
     db.add(event)
     _audit(
         db,
-        actor="client",
+        actor=actor or "client",
         action="ESCROW_REJECTED" if agreement.status != EscrowStatus.CANCELLED else "ESCROW_CANCELLED",
         escrow=agreement,
         data={
@@ -251,12 +274,14 @@ def client_reject(db: Session, escrow_id: int, payload: EscrowActionPayload | No
     return agreement
 
 
-def check_deadline(db: Session, escrow_id: int) -> EscrowAgreement:
+def check_deadline(
+    db: Session, escrow_id: int, *, actor: str | None = None
+) -> EscrowAgreement:
     agreement = _get_escrow_or_404(db, escrow_id)
 
     if agreement.status == EscrowStatus.FUNDED and agreement.deadline_at <= utcnow():
         logger.info("Escrow deadline reached, auto-approving", extra={"escrow_id": agreement.id})
-        return client_approve(db, escrow_id, None)
+        return client_approve(db, escrow_id, None, actor=actor or "system:deadline")
     return agreement
 
 
