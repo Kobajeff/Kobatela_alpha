@@ -26,15 +26,14 @@ async def psp_webhook(
     x_psp_event_id: str | None = Header(default=None),
     x_psp_ref: str | None = Header(default=None),
 ) -> dict[str, str]:
-    secret = settings.psp_webhook_secret
-    if secret is None:
+    if not (settings.psp_webhook_secret or settings.psp_webhook_secret_next):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="PSP webhook secret not configured",
         )
 
     body = await request.body()
-    ok, reason = psp_webhooks.verify_signature(secret, body, x_psp_signature, x_psp_timestamp)
+    ok, reason = psp_webhooks.verify_signature(body, x_psp_signature, x_psp_timestamp)
     if not ok:
         logger.warning(
             "Invalid PSP webhook signature",

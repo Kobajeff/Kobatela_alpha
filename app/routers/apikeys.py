@@ -12,6 +12,7 @@ from app.db import get_db
 from app.models.api_key import ApiKey, ApiScope
 from app.models.audit import AuditLog
 from app.security import require_scope
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.apikey import gen_key
 
@@ -98,7 +99,7 @@ def create_api_key(payload: CreateKeyIn, db: Session = Depends(get_db)) -> ApiKe
             action="CREATE_API_KEY",
             entity="ApiKey",
             entity_id=row.id,
-            data_json={"name": row.name, "scope": row.scope.value},
+            data_json=sanitize_payload_for_audit({"name": row.name, "scope": row.scope.value}),
             at=now,
         )
     )
@@ -150,7 +151,7 @@ def revoke_apikey(api_key_id: int, db: Session = Depends(get_db)) -> Response:
                 action="REVOKE_API_KEY_NOOP",
                 entity="ApiKey",
                 entity_id=api_key_id,
-                data_json={},
+                data_json=sanitize_payload_for_audit({}),
                 at=now,
             )
         )
@@ -165,7 +166,7 @@ def revoke_apikey(api_key_id: int, db: Session = Depends(get_db)) -> Response:
             action="REVOKE_API_KEY",
             entity="ApiKey",
             entity_id=api_key_id,
-            data_json={"name": row.name},
+            data_json=sanitize_payload_for_audit({"name": row.name}),
             at=now,
         )
     )

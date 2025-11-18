@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hashlib
 import hmac
 import logging
 import time
@@ -9,26 +10,30 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.payment import Payment, PaymentStatus
 from app.models.psp_webhook import PSPWebhookEvent
 from app.models.audit import AuditLog
 from app.services.payments import finalize_payment_settlement
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 def verify_signature(
-    secret: str,
     body_bytes: bytes,
     signature: str | None,
     timestamp: str | None,
     *,
-    skew_seconds: int = 300,
+    skew_seconds: int | None = None,
 ) -> tuple[bool, str]:
-    """Validate webhook signatures with HMAC and timestamp skew protection."""
+    """Validate webhook signatures with HMAC rotation and timestamp skew protection."""
 
-    if not secret:
+    secrets = [settings.psp_webhook_secret, settings.psp_webhook_secret_next]
+    secrets = [s for s in secrets if s]
+    if not secrets:
         return False, "secret-missing"
     if not signature:
         return False, "signature-missing"
@@ -40,16 +45,18 @@ def verify_signature(
     except (TypeError, ValueError):
         return False, "timestamp-invalid"
 
+    drift = skew_seconds or settings.psp_webhook_max_drift_seconds or 300
     now = time.time()
-    if abs(now - sent_ts) > skew_seconds:
+    if abs(now - sent_ts) > drift:
         return False, "timestamp-skew"
 
     payload = timestamp.encode() + b"." + body_bytes
-    digest = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(digest, signature):
-        return False, "hmac-mismatch"
+    for secret in secrets:
+        digest = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(digest, signature):
+            return True, ""
 
-    return True, ""
+    return False, "hmac-mismatch"
 
 
 def handle_event(
@@ -131,7 +138,7 @@ def _mark_payment_error(db: Session, *, psp_ref: str | None) -> None:
             action="PAYMENT_FAILED",
             entity="Payment",
             entity_id=payment.id,
-            data_json={"psp_ref": psp_ref},
+            data_json=sanitize_payload_for_audit({"psp_ref": psp_ref}),
             at=utcnow(),
         )
     )

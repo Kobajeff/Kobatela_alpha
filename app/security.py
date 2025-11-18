@@ -13,6 +13,7 @@ from app.db import get_db
 from app.models.api_key import ApiKey, ApiScope
 from app.models.audit import AuditLog
 from app.utils.apikey import find_valid_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 
 
@@ -53,7 +54,7 @@ def require_api_key(
                 action="LEGACY_API_KEY_USED",
                 entity="ApiKey",
                 entity_id=0,
-                data_json={"env": ENV},
+                data_json=sanitize_payload_for_audit({"env": ENV}),
                 at=now,
             )
         )
@@ -87,7 +88,7 @@ def require_api_key(
                 action="LEGACY_API_KEY_USED",
                 entity="ApiKey",
                 entity_id=0,
-                data_json={"env": ENV},
+                data_json=sanitize_payload_for_audit({"env": ENV}),
                 at=now,
             )
         )
@@ -123,7 +124,7 @@ def require_api_key(
             action="API_KEY_USED",
             entity="ApiKey",
             entity_id=key.id,
-            data_json=payload,
+            data_json=sanitize_payload_for_audit(payload),
             at=now,
         )
     )

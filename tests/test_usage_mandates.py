@@ -1,10 +1,15 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
 from app.models import UsageMandate, UsageMandateStatus, User
 from app.services import mandates as mandate_service
+
+
+def _idem_headers(base_headers: dict[str, str]) -> dict[str, str]:
+    return {**base_headers, "Idempotency-Key": str(uuid4())}
 
 
 @pytest.mark.anyio("asyncio")
@@ -71,7 +76,7 @@ async def test_purchase_blocked_without_mandate(client, auth_headers):
             "amount": 10.0,
             "currency": "USD",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
     assert purchase.status_code == 403
     assert purchase.json()["error"]["code"] == "MANDATE_REQUIRED"
@@ -121,7 +126,7 @@ async def test_purchase_allowed_under_mandate(client, auth_headers):
             "amount": 25.0,
             "currency": "USD",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
     assert purchase.status_code == 201
     assert purchase.json()["status"] == "COMPLETED"
@@ -172,7 +177,7 @@ async def test_purchase_denied_by_mandate_restrictions(client, auth_headers):
             "amount": 5.0,
             "currency": "USD",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
     assert denied.status_code == 403
     assert denied.json()["error"]["code"] == "MANDATE_MERCHANT_FORBIDDEN"
@@ -231,7 +236,7 @@ async def test_purchase_rejects_different_sender(
             "amount": "20.00",
             "currency": "EUR",
         },
-        headers=auth_headers,
+        headers=_idem_headers(auth_headers),
     )
 
     assert response.status_code == 403
