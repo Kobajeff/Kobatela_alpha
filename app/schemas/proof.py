@@ -25,6 +25,12 @@ class ProofRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    ai_risk_level: str | None = None
+    ai_score: float | None = None
+    ai_flags: list[str] | None = None
+    ai_explanation: str | None = None
+    ai_checked_at: datetime | None = None
+
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
