@@ -48,6 +48,21 @@ class Settings(BaseSettings):
     SENTRY_DSN: str | None = None
     PROMETHEUS_ENABLED: bool = True
 
+    # --- AI Proof Advisor (MVP) ------------------------------------------
+    AI_PROOF_ADVISOR_ENABLED: bool = False
+    AI_PROOF_ADVISOR_PROVIDER: str = "openai"
+    AI_PROOF_ADVISOR_MODEL: str = "gpt-5.1-mini"
+    AI_PROOF_MAX_IMAGE_RESOLUTION_X: int = 1600
+    AI_PROOF_MAX_IMAGE_RESOLUTION_Y: int = 1200
+    AI_PROOF_MAX_PDF_PAGES: int = 5
+    AI_PROOF_TIMEOUT_SECONDS: int = 12
+    OPENAI_API_KEY: str | None = None
+
+    # --- Invoice OCR -----------------------------------------------------
+    INVOICE_OCR_ENABLED: bool = False
+    INVOICE_OCR_PROVIDER: str = "none"
+    INVOICE_OCR_API_KEY: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env", env_prefix="", env_file_encoding="utf-8"
     )
