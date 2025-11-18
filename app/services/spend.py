@@ -248,7 +248,7 @@ def create_purchase(
     db: Session,
     payload: PurchaseCreate,
     *,
-    idempotency_key: str,
+    idempotency_key: str | None,
     actor: str | None = None,
 ) -> Purchase:
     """Create an authorized purchase if the usage is allowed."""
