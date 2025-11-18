@@ -9,10 +9,14 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from openai import OpenAI
 
 from app.config import settings
 from app.services.ai_proof_flags import ai_model, ai_timeout_seconds
+
+try:
+    from openai import OpenAI  # type: ignore[import-not-found]
+except Exception:  # noqa: BLE001
+    OpenAI = None  
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +241,7 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------
 def call_ai_proof_advisor(
     *,
-    model: str | None = None,
+    model: str = "gpt-5.1-mini",
     context: Dict[str, Any],
     proof_storage_url: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -261,6 +265,21 @@ def call_ai_proof_advisor(
 
     sanitized_context = _sanitize_context(context)
     user_content = build_ai_user_content(sanitized_context)
+    if OpenAI is None:
+        logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
+        return {
+            "risk_level": "warning",
+            "score": 0.5,
+            "flags": ["ai_unavailable", "missing_sdk"],
+            "explanation": (
+                "L'analyse automatique n'a pas pu être effectuée "
+                "car le SDK OpenAI n'est pas installé côté serveur. "
+                "Une revue manuelle est recommandée."
+            ),
+        }
+
+
+ 
 
     messages: List[Dict[str, Any]] = []
     messages.append(

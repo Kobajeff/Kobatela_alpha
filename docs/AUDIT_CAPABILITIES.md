@@ -37,55 +37,70 @@
 ## C. Inventaire des endpoints
 | Méthode | Path | Handler | Auth | Rôles | Modèle requête | Modèle réponse | Codes HTTP |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| GET | /health | `health.healthcheck` | Aucun | - | - | `{status}` | 200 |
-| POST | /users | `users.create_user` | API key | admin/support | `UserCreate` | `UserRead` | 201 / 400 |
-| GET | /users/{id} | `users.get_user` | API key | admin/support | - | `UserRead` | 200 / 404 |
-| POST | /escrows | `escrow.create_escrow` | API key | sender/admin | `EscrowCreate` | `EscrowRead` | 201 |
-| POST | /escrows/{id}/deposit | `escrow.deposit` | API key | sender/admin | `EscrowDepositCreate` + `Idempotency-Key?` | `EscrowRead` | 200 / 404 |
-| POST | /proofs | `proofs.submit_proof` | API key | sender | `ProofCreate` | `ProofRead` | 201 / 404 / 422 |
-| POST | /proofs/{id}/decision | `proofs.decide_proof` | API key | sender | `ProofDecision` | `ProofRead` | 200 / 400 |
-| POST | /mandates | `mandates.create_mandate` | API key | sender | `UsageMandateCreate` | `UsageMandateRead` | 201 |
-| POST | /spend/purchases | `spend.create_purchase` | API key | admin/sender | `PurchaseCreate` (+ idempotency optional) | `PurchaseRead` | 201 / 403 / 409 |
-| POST | /spend | `spend.spend` | API key | admin/sender | `SpendIn` + `Idempotency-Key` obligatoire | dict paiement | 200 / 400 / 409 |
-| POST | /psp/webhook | `psp.psp_webhook` | Secret PSP + DB | - | JSON brut + headers | `{ok,event_id}` | 200 / 401 / 503 |
-| POST | /payments/execute/{id} | `payments.execute_payment` | API key | sender | path id | `PaymentRead` | 200 / 404 / 409 |
-| POST | /transactions | `transactions.post_transaction` | API key | admin | `TransactionCreate` + `Idempotency-Key` | `TransactionRead` | 201 / 400 / 403 |
+| GET | /health | `health.healthcheck` | Aucune | - | - | `{status}` | 200【F:app/routers/health.py†L4-L11】 |
+| POST | /users | `users.create_user` | API key + scope | `admin`, `support` | `UserCreate` | `UserRead` | 201/400【F:app/routers/users.py†L17-L47】 |
+| POST | /allowlist | `transactions.add_to_allowlist` | API key + scope | `admin` | `AllowlistCreate` | `{status}` | 201/200【F:app/routers/transactions.py†L20-L34】 |
+| POST | /certified | `transactions.add_certification` | API key + scope | `admin` | `CertificationCreate` | `{status}` | 201【F:app/routers/transactions.py†L34-L42】 |
+| POST | /transactions | `transactions.post_transaction` | API key + scope | `admin` | `TransactionCreate` + `Idempotency-Key` requis | `TransactionRead` | 201/400【F:app/routers/transactions.py†L45-L59】 |
+| GET | /transactions/{id} | `transactions.get_transaction` | API key + scope | `admin` | - | `TransactionRead` | 200/404【F:app/routers/transactions.py†L62-L76】 |
+| POST | /escrows | `escrow.create_escrow` | API key + scope | `sender`, `admin` | `EscrowCreate` | `EscrowRead` | 201【F:app/routers/escrow.py†L13-L22】 |
+| POST | /escrows/{id}/deposit | `escrow.deposit` | API key + scope | `sender`, `admin` | `EscrowDepositCreate` + `Idempotency-Key?` | `EscrowRead` | 200【F:app/routers/escrow.py†L25-L32】 |
+| POST | /escrows/{id}/client-approve | `escrow.client_approve` | API key + scope | `sender`, `admin` | `EscrowActionPayload?` | `EscrowRead` | 200【F:app/routers/escrow.py†L40-L46】 |
+| POST | /alerts | `alerts.list_alerts` | API key + scope | `admin`, `support` | Query `type?` | `list[AlertRead]` | 200【F:app/routers/alerts.py†L12-L25】 |
+| POST | /mandates | `mandates.create_mandate` | API key + scope | `sender`, `admin` | `UsageMandateCreate` | `UsageMandateRead` | 201【F:app/routers/mandates.py†L13-L24】 |
+| POST | /spend/categories | `spend.create_category` | API key + scope | `admin`, `support` | `SpendCategoryCreate` | `SpendCategoryRead` | 201【F:app/routers/spend.py†L33-L40】 |
+| POST | /spend/merchants | `spend.create_merchant` | API key + scope | `admin`, `support` | `MerchantCreate` | `MerchantRead` | 201【F:app/routers/spend.py†L43-L50】 |
+| POST | /spend/allow | `spend.allow_usage` | API key + scope | `admin`, `support` | `AllowedUsageCreate` | `{status}` | 201/200【F:app/routers/spend.py†L53-L59】 |
+| POST | /spend/allowed | `spend.add_allowed_payee` | API key + scope | `admin`, `support` | `AddPayeeIn` | Payee dict | 201/409【F:app/routers/spend.py†L84-L140】【F:app/services/usage.py†L40-L110】 |
+| POST | /spend | `spend.spend` | API key + scope | `sender`, `admin` | `SpendIn` + `Idempotency-Key` requis | Paiement dict | 200/400/409【F:app/routers/spend.py†L115-L140】【F:app/services/usage.py†L115-L246】 |
+| POST | /payments/execute/{id} | `payments.execute_payment` | API key + scope | `sender`, `admin` | - | `PaymentRead` | 200/404/409【F:app/routers/payments.py†L11-L22】【F:app/services/payments.py†L205-L287】 |
+| POST | /psp/webhook | `psp.webhook` | Secret PSP + optional API key | - | Raw JSON + headers | `{ok, event_id}` | 200/401/503【F:app/routers/psp.py†L20-L61】 |
 
-## D. Modèle de données & machines à états
-- **Entités principales**
-  - `EscrowAgreement` (`amount_total` Numeric(18,2), `status` Enum DRAFT→RELEASED/REFUNDED/CANCELLED) + `EscrowDeposit` (idempotency_key unique) + `EscrowEvent` (timeline JSON).
-  - `Milestone` (`amount` Numeric(18,2), `proof_type` str, `proof_requirements` JSON, geofence floats) & `Proof` (`metadata` JSON, `ai_*` colonnes nullable, `status` string).
-  - `Payment` (`amount` Numeric, `status` Enum, `psp_ref`, `idempotency_key`) et `PSPWebhookEvent` (idempotence sur `event_id`).
-  - `UsageMandate` (`total_amount`, `total_spent`, `status`) + `AllowedUsage`, `AllowedPayee`, `Purchase` (Numeric) pour la couche spend.
-  - `Transaction`, `AllowedRecipient`, `CertifiedAccount` pour les flux restreints; `ApiKey`, `AuditLog`, `User` pour sécurité/audit.
-- **Machines à états**
-  - **Escrow** : `DRAFT` → `FUNDED` → `RELEASABLE` → `RELEASED` ou `REFUNDED/CANCELLED` (audit `_audit` à chaque mutation dans `app/services/escrow.py`).
-  - **Milestone/Proof** : `WAITING` → `PENDING_REVIEW` (soumission) → `APPROVED/REJECTED`; auto-approve photo => payout immédiat.
-  - **Payment** : `PENDING` → `SENT` → `SETTLED/ERROR` (PSP webhook ou `execute_payment`).
-  - **UsageMandate** : `ACTIVE` avec compteur `total_spent`, transitions implicites vers “consumed/expired” via cron `expire_mandates_once`.
+## D. Data model & states
+| Entity | Key fields & contraintes | Notes |
+| --- | --- | --- |
+| User | `username`, `email` uniques, `is_active` | Audit `CREATE_USER` mais acteur générique.【F:app/models/user.py†L11-L22】【F:app/routers/users.py†L37-L47】 |
+| ApiKey | `prefix`, `key_hash` uniques, `scope`, dates | Audit usage avec `actor=f"apikey:{id}"` et rejet clé legacy hors dev.【F:app/models/api_key.py†L12-L31】【F:app/security.py†L31-L131】 |
+| AllowedRecipient | `(owner_id, recipient_id)` unique | Retourne `exists` sans audit en doublon.【F:app/models/allowlist.py†L8-L15】【F:app/services/transactions.py†L44-L96】 |
+| CertifiedAccount | `user_id` unique, `level`, `certified_at` | Audit `CERTIFICATION_UPDATE` sur création/mise à jour.【F:app/models/certified.py†L18-L25】【F:app/services/transactions.py†L79-L107】 |
+| Transaction | `sender_id`, `receiver_id`, `amount`, `status`, `idempotency_key` | Enum `COMPLETED`, idempotence obligatoire côté API.【F:app/models/transaction.py†L20-L37】【F:app/routers/transactions.py†L45-L59】 |
+| EscrowAgreement | `client_id`, `provider_id`, `amount_total`, `status`, `deadline_at` | Événements JSON + audits transitions.【F:app/models/escrow.py†L23-L69】【F:app/services/escrow.py†L168-L213】 |
+| Milestone | `escrow_id`, `idx` unique, `amount`, `status` | Convergence proofs/paiements via `finalize_payment_settlement`.【F:app/models/milestone.py†L22-L47】【F:app/services/payments.py†L288-L392】 |
+| Payment | `escrow_id`, `amount`, `status`, `psp_ref`, `idempotency_key` | Numeric + audits `EXECUTE_PAYOUT` et `PAYMENT_SETTLED`.【F:app/models/payment.py†L21-L38】【F:app/services/payments.py†L205-L392】 |
+| AllowedPayee | `escrow_id`, `payee_ref` unique, limites `daily/total`, compteurs | Ajout audité (actor "system"), consommation verrouillée FOR UPDATE.【F:app/models/allowed_payee.py†L11-L32】【F:app/services/usage.py†L40-L210】 |
+| SpendCategory & Merchant | Codes/refs uniques | Audits `SPEND_CATEGORY_CREATED` & `SPEND_MERCHANT_CREATED`.【F:app/models/spend.py†L13-L160】【F:app/services/spend.py†L98-L166】 |
 
-## E. Résultats de stabilité
-- `pytest -q` → `57 passed, 1 skipped` (2 warnings : config Pydantic v2, coroutine test non géré).【cc91c4†L1-L15】 Aucun test ciblant IA/OCR hormis `tests/test_ai_config.py` (flag OFF par défaut).
-- `alembic upgrade head`, `alembic current`, `alembic heads`, `alembic history --verbose` exécutés avec succès ; head unique `9c697d41f421`.【39ea3d†L4-L11】【83dc3b†L1-L4】【bb8c07†L1-L2】【ea17a3†L1-L48】
-- Commandes `rg -n "Numeric(18, 2"` et `rg -n "float("` ont échoué (regex non échappée) — cf. section K pour le log.
-- Revue statique : aucun `@app.on_event`, lifespan unique, mais `psp_webhooks.verify_signature` plantera toujours (`hashlib` manquant), rendant l’endpoint inutilisable.
+State machines :
+- Escrow : `DRAFT` → `FUNDED` → `RELEASABLE` → `RELEASED/REFUNDED/CANCELLED`, finalisé automatiquement quand tous les jalons sont payés.【F:app/models/escrow.py†L12-L69】【F:app/services/payments.py†L353-L390】
+- Milestone : `WAITING` → `PENDING_REVIEW` → `PAID`/`REJECTED`, orchestré par proofs et paiements.【F:app/models/milestone.py†L22-L47】【F:app/services/proofs.py†L139-L214】
+- Payment : `PENDING` → `SENT` → `SETTLED/ERROR`, harmonisé par `finalize_payment_settlement` ou le webhook PSP.【F:app/models/payment.py†L11-L38】【F:app/services/payments.py†L205-L392】【F:app/services/psp_webhooks.py†L70-L138】
+- UsageMandate : `ACTIVE` → `CONSUMED/EXPIRED`, consommation atomique via `create_purchase` et cron d’expiration.【F:app/models/usage_mandate.py†L30-L65】【F:app/services/spend.py†L229-L413】【F:app/services/mandates.py†L150-L175】
 
-## F. Sécurité & intégrité
-- **AuthN/Z** : `require_api_key` vérifie le prefix hashé, `require_scope` impose un set de rôles par router; `DEV_API_KEY` uniquement accepté si `ENV` ∈ {dev, local, dev_local} puis rejeté ailleurs avec code `LEGACY_KEY_FORBIDDEN`.
-- **Validation entrée** : schémas Pydantic imposent montants positifs, pattern devise (`PurchaseCreate.currency`), validations geofence, EXIF, metadata photo; `ProofCreate` limite `type/storage_url/sha256`.
-- **Preuves & fichiers** : `submit_proof` réalise validations EXIF/GPS, géofence Haversine, erreurs “dures” 422, soft errors => review. AI ne s’exécute qu’après validations photo réussies.
-- **Secrets/config** : `Settings` centralise AI et OCR flags (`AI_PROOF_ADVISOR_ENABLED=False`, `INVOICE_OCR_ENABLED=False` par défaut). `PSP_WEBHOOK_SECRET` requis au startup (`lifespan` lève `RuntimeError` sinon).
-- **Audit/logging** : `AuditLog` alimenté pour escrows, proofs, payments, transactions, spend; `logger` utilisé pour chaque chemin critique. Limite : acteurs restent génériques.
-- **Fichiers & privacy** : hash SHA-256 unique par preuve, `metadata` JSON stocke OCR/IA — attention aux fuites (URL S3, supplier_name, IBAN masquée) si logs non filtrés.
+## E. Stability results
+- `alembic current --verbose` (SQLite dev) : aucun drift signalé, base fraîche sans révision appliquée.【823cf6†L1-L4】
+- `alembic heads` → `8b7e_add_api_keys` (head unique).【dae9a3†L1-L2】
+- `pytest -q` : 51 tests verts, 1 avertissement Pydantic V2 (config class-based).【d1eb61†L1-L10】
+- Revue statique : aucun `@app.on_event`, vérifications d’attente `Idempotency-Key` sur `/spend` et `/transactions`, mais idempotence facultative sur `/spend/purchases` (voir risques).
 
-## G. Observabilité & exploitation
-- **Logging structuré** via `app/core/logging`; Sentry (DSN) et métriques Prometheus optionnels. Middleware CORS paramétré.
-- **Gestion erreurs** : handlers globaux `generic_exception_handler` et `http_exception_handler` renvoient payload JSON normalisé.
-- **Migrations** : chaîne Alembic complète (init → proofs AI → proof_requirements). `db.create_all()` reste dans lifespan pour SQLite/dev, mais Alembic reste la source pour prod.
-- **Ops** : APScheduler optionnel (job d’expiration mandats) avertit si activé hors dev; pas de lock distribué natif.
+## F. Security & integrity
+- AuthN/Z : `require_api_key` journalise chaque appel avec l’identifiant de la clé, et `require_scope` accepte des ensembles d’`ApiScope` pour restreindre chaque route critique.【F:app/security.py†L31-L154】
+- Validation input : schémas Pydantic imposent montants positifs, devise ISO et formats proofs/mandats, limitant les injections incohérentes.【F:app/schemas/spend.py†L12-L140】【F:app/schemas/mandates.py†L12-L88】【F:app/schemas/proof.py†L7-L40】
+- Idempotence & transactions : dépôts, paiements, usage spend et transactions réutilisent `get_existing_by_key` et contraintes uniques pour éviter les doublons, avec verrou `FOR UPDATE` sur les payees.【F:app/services/escrow.py†L101-L165】【F:app/services/payments.py†L205-L392】【F:app/services/usage.py†L97-L246】
+- PSP & secrets : démarrage bloquant sans `PSP_WEBHOOK_SECRET`, HMAC SHA-256 + timestamp ±5 min et persistance idempotente des événements.【F:app/main.py†L23-L64】【F:app/services/psp_webhooks.py†L21-L109】
+- Audit : toutes les mutations critiques écrivent dans `AuditLog`, mais les actions back-office utilisent encore des acteurs génériques (cf. risques).【F:app/utils/audit.py†L10-L30】【F:app/services/spend.py†L112-L225】【F:app/services/transactions.py†L44-L118】
 
-## H. Registre de risques (priorisé)
-| ID | Composant | Risque | Impact | Probabilité | Priorité | Recommandation |
+### Encadré DEV_API_KEY
+- La configuration centralisée fixe `DEV_API_KEY_ALLOWED = (ENV in {"dev", "local", "dev_local"})`, garantissant que la clé legacy n’est chargée qu’en environnement de développement contrôlé.【F:app/config.py†L11-L24】
+- Lorsque cette condition est vraie (ENV=dev seulement), le guard `require_api_key` accepte la clé, crée un audit `LEGACY_API_KEY_USED` et force l’acteur `legacy-apikey` pour éviter la confusion avec des clés nominatives.【F:app/security.py†L42-L83】
+- Dans tout autre environnement (staging/prod), le même guard rejette explicitement `DEV_API_KEY` avec le code d’erreur dédié `LEGACY_KEY_FORBIDDEN` (HTTP 401), tout en conservant une trace dans les journaux applicatifs ; aucune requête DB n’est effectuée tant que la clé n’est pas autorisée.【F:app/security.py†L60-L92】【F:app/utils/errors.py†L5-L22】
+
+## G. Observability & ops
+- Logging structuré et Sentry optionnel via `app/config.py`; CORS et métriques exposées par la configuration centrale.【F:app/main.py†L52-L78】【F:app/config.py†L32-L71】
+- Lifespan unique (`lifespan` context manager) : initialisation DB et scheduler encapsulés sans `@app.on_event` legacy.【F:app/main.py†L23-L74】
+- Scheduler optionnel (`SCHEDULER_ENABLED`) avec avertissement clair lorsqu’il est activé hors dev, rappelant la contrainte “un seul runner”.【F:app/main.py†L33-L74】
+
+## H. Risk register (prioritized)
+| ID | Component | Risk | Impact | Likelihood | Priority | Recommendation |
 | --- | --- | --- | --- | --- | --- | --- |
 | R1 | Spend / Mandates (`app/services/spend.py` L120-L210) | Montants mandats/purchases ne sont jamais normalisés via `Decimal.quantize` avant écriture DB ; des montants à 3 décimales peuvent dériver les compteurs `total_spent`. | Perte de cohérence ledger, litiges financiers | Moyenne | **P0** | Introduire un helper `_to_decimal` commun (cf. `escrow._to_decimal`) et l’appliquer à `payload.amount` avant `_consume_mandate_atomic`, avec test régression.
 | R2 | PSP webhook (`app/services/psp_webhooks.py` L13-L43) | `hashlib` n’est pas importé alors qu’il est utilisé pour l’HMAC → NameError avant toute vérification; l’endpoint renvoie 500, aucun évènement PSP traité. | Confirmations PSP ignorées, paiements jamais soldés | Élevée | **P0** | Ajouter `import hashlib`, couvrir par test `test_psp_webhook_invalid_signature` et smoke test sur signature valide.
