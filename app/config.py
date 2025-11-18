@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     AI_PROOF_TIMEOUT_SECONDS: int = 12
     OPENAI_API_KEY: str | None = None
 
+    # --- Invoice OCR -----------------------------------------------------
+    INVOICE_OCR_ENABLED: bool = False
+    INVOICE_OCR_PROVIDER: str = "none"
+    INVOICE_OCR_API_KEY: str | None = None
+
     model_config = SettingsConfigDict(
         env_file=".env", env_prefix="", env_file_encoding="utf-8"
     )

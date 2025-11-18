@@ -43,7 +43,9 @@ def compute_document_backend_checks(
     expected_amount = proof_requirements.get("expected_amount")
     expected_currency = proof_requirements.get("expected_currency")
 
-    invoice_amount = metadata.get("invoice_amount")
+    invoice_amount = metadata.get("invoice_total_amount")
+    if invoice_amount is None:
+        invoice_amount = metadata.get("invoice_amount")
     invoice_currency = metadata.get("invoice_currency")
 
     amount_check: Dict[str, Any] = {

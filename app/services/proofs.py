@@ -27,6 +27,7 @@ from app.services import (
 from app.services.ai_proof_advisor import call_ai_proof_advisor
 from app.services.ai_proof_flags import ai_enabled
 from app.services.document_checks import compute_document_backend_checks
+from app.services.invoice_ocr import enrich_metadata_with_invoice_ocr
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
@@ -61,6 +62,12 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     # en cas d’erreur "dure" (géofence, exif manquant, trop vieux, etc.).
 
     metadata_payload = dict(payload.metadata or {})
+
+    if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
+        metadata_payload = enrich_metadata_with_invoice_ocr(
+            storage_url=payload.storage_url,
+            existing_metadata=metadata_payload,
+        )
     review_reason: str | None = None
     auto_approve = False
 
