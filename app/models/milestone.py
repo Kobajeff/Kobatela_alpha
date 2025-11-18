@@ -56,6 +56,7 @@ class Milestone(Base):
     geofence_lat: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     geofence_lng: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     geofence_radius_m: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
+    proof_requirements: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[MilestoneStatus] = mapped_column(SqlEnum(MilestoneStatus), nullable=False, default=MilestoneStatus.WAITING)
 
     proofs = relationship("Proof", back_populates="milestone", cascade="all, delete-orphan")

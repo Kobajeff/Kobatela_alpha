@@ -53,6 +53,7 @@ class MilestoneCreate(BaseModel):
     validator: str = Field(min_length=1, max_length=50)
 
     # JSON configuration describing the expected proof (optional)
+    # Should conform *loosely* to PROOF_REQUIREMENTS_JSON_SCHEMA
     proof_requirements: dict[str, Any] | None = Field(default=None)
 
     geofence_lat: float | None = Field(default=None)
@@ -80,3 +81,4 @@ class MilestoneRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
