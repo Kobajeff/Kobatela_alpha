@@ -26,6 +26,7 @@ from app.services import (
 )
 from app.services.ai_proof_advisor import call_ai_proof_advisor
 from app.services.ai_proof_flags import ai_enabled
+from app.services.document_checks import compute_document_backend_checks
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
@@ -183,6 +184,13 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         # → always manual review (no auto_approve) BUT we call AI as an advisor if enabled.
         if ai_enabled():
             try:
+                proof_reqs = getattr(milestone, "proof_requirements", None)
+
+                backend_checks = compute_document_backend_checks(
+                    proof_requirements=proof_reqs,
+                    metadata=metadata_payload,
+                )
+
                 ai_context = {
                     "mandate_context": {
                         "escrow_id": payload.escrow_id,
@@ -190,16 +198,11 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
                         "milestone_label": milestone.label,
                         "milestone_amount": float(milestone.amount),
                         "proof_type": milestone.proof_type,
-                        "proof_requirements": getattr(milestone, "proof_requirements", None),
+                        "proof_requirements": proof_reqs,
                     },
-                    "backend_checks": {
-                        # For now, no hard validation for docs
-                        "has_metadata": payload.metadata is not None,
-                        "validation_ok": True,
-                        "validation_reason": None,
-                    },
+                    "backend_checks": backend_checks,
                     "document_context": {
-                        "type": payload.type,
+                        "type": payload.type,  # e.g. "PDF", "INVOICE", "CONTRACT"
                         "storage_url": payload.storage_url,
                         "sha256": payload.sha256,
                         "metadata": metadata_payload,
