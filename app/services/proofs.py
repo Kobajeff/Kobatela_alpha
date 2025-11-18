@@ -23,6 +23,9 @@ from app.services import (
     payments as payments_service,
     rules as rules_service,
 )
+from app.services.ai_proof_advisor import call_ai_proof_advisor
+from app.services.ai_proof_flags import ai_enabled
+from app.services.document_checks import compute_document_backend_checks
 from app.services.idempotency import get_existing_by_key
 from app.utils.errors import error_response
 from app.utils.time import utcnow
@@ -134,6 +137,88 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
                 )
         else:
             auto_approve = True
+
+            # 5) (NEW) Optional AI call for risk assessment (PHOTO only)
+            if ai_enabled():
+                try:
+                    ai_context = {
+                        "mandate_context": {
+                            "escrow_id": payload.escrow_id,
+                            "milestone_idx": payload.milestone_idx,
+                            "milestone_label": milestone.label,
+                            "milestone_amount": float(milestone.amount),
+                            "proof_type": milestone.proof_type,
+                            "proof_requirements": getattr(milestone, "proof_requirements", None),
+                        },
+                        "backend_checks": {
+                            "has_metadata": payload.metadata is not None,
+                            "geofence_configured": geofence is not None,
+                            "validation_ok": bool(ok),
+                            "validation_reason": reason,
+                        },
+                        "document_context": {
+                            "type": payload.type,
+                            "storage_url": payload.storage_url,
+                            "sha256": payload.sha256,
+                            "metadata": metadata_payload,
+                        },
+                    }
+
+                    ai_result = call_ai_proof_advisor(
+                        context=ai_context,
+                        proof_storage_url=payload.storage_url,
+                    )
+
+                    # Store AI result in metadata of the proof
+                    metadata_payload["ai_assessment"] = ai_result
+
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("AI proof advisor integration failed: %s", exc)
+                    # Never block the proof because of AI issues
+                    # -> fall back to normal behavior (no AI enrichment)
+                    # (nothing else to do here)
+
+    else:
+        # NON-PHOTO proofs (PDF, invoices, contracts, other)
+        # → always manual review (no auto_approve) BUT we call AI as an advisor if enabled.
+        if ai_enabled():
+            try:
+                proof_reqs = getattr(milestone, "proof_requirements", None)
+
+                backend_checks = compute_document_backend_checks(
+                    proof_requirements=proof_reqs,
+                    metadata=metadata_payload,
+                )
+
+                ai_context = {
+                    "mandate_context": {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_idx": payload.milestone_idx,
+                        "milestone_label": milestone.label,
+                        "milestone_amount": float(milestone.amount),
+                        "proof_type": milestone.proof_type,
+                        "proof_requirements": proof_reqs,
+                    },
+                    "backend_checks": backend_checks,
+                    "document_context": {
+                        "type": payload.type,  # e.g. "PDF", "INVOICE", "CONTRACT"
+                        "storage_url": payload.storage_url,
+                        "sha256": payload.sha256,
+                        "metadata": metadata_payload,
+                        # Future extension: "ocr_text": "..." once OCR is wired
+                    },
+                }
+
+                ai_result = call_ai_proof_advisor(
+                    context=ai_context,
+                    proof_storage_url=payload.storage_url,
+                )
+                metadata_payload["ai_assessment"] = ai_result
+
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("AI proof advisor (doc) integration failed: %s", exc)
+                # Never block the proof because of AI issues
+                # → continue with manual review as usual
 
     # -------------------------
     # Contrôles d’état APRES validation photo
