@@ -7,5 +7,6 @@ async def test_healthcheck(client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
-    assert isinstance(payload["psp_secrets_configured"], bool)
-    assert isinstance(payload["scheduler_enabled"], bool)
+    assert payload["psp_webhook_secret_status"] in {"missing", "partial", "ok"}
+    assert isinstance(payload["scheduler_config_enabled"], bool)
+    assert isinstance(payload["scheduler_running"], bool)

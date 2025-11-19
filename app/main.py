@@ -11,9 +11,11 @@ from fastapi.responses import JSONResponse
 from app import db  # moteur/metadata centralisés
 from app.config import AppInfo, SCHEDULER_ENABLED, get_settings
 from app.core.logging import get_logger, setup_logging
+from app.core.runtime_state import set_scheduler_active
 import app.models  # enregistre les tables
 from app.routers import apikeys, get_api_router
 from app.services.cron import expire_mandates_once
+from app.services.scheduler_lock import release_scheduler_lock, try_acquire_scheduler_lock
 from app.utils.errors import error_response
 
 settings = get_settings()
@@ -56,20 +58,30 @@ async def lifespan(app: FastAPI):
     # NOTE: In multi-replica deployments, enable SCHEDULER_ENABLED=true on ONE runner only (others=false).
     # For 1.0.0 consider external cron/worker or APScheduler with a distributed job store/lock.
     # Lancer le scheduler uniquement sur l'instance désignée (cf. déploiement multi-runner).
+    set_scheduler_active(False)
+    lock_acquired = False
     if SCHEDULER_ENABLED:
-        global scheduler
-        scheduler = AsyncIOScheduler()
-        scheduler.start()
-        scheduler.add_job(
-            expire_mandates_once,
-            "interval",
-            minutes=60,
-            id="expire-mandates",
-            replace_existing=True,
-        )
-        if settings.app_env.lower() != "dev":
+        lock_acquired = try_acquire_scheduler_lock()
+        if lock_acquired:
+            global scheduler
+            scheduler = AsyncIOScheduler()
+            scheduler.start()
+            scheduler.add_job(
+                expire_mandates_once,
+                "interval",
+                minutes=60,
+                id="expire-mandates",
+                replace_existing=True,
+            )
+            set_scheduler_active(True)
+            if settings.app_env.lower() != "dev":
+                logger.warning(
+                    "APScheduler enabled with DB lock; ensure only one runner has SCHEDULER_ENABLED=1 in production.",
+                    extra={"env": settings.app_env},
+                )
+        else:
             logger.warning(
-                "APScheduler enabled with in-memory store; ensure only one runner has SCHEDULER_ENABLED=1 in production.",
+                "Scheduler disabled because lock is already held by another instance.",
                 extra={"env": settings.app_env},
             )
     try:
@@ -77,6 +89,9 @@ async def lifespan(app: FastAPI):
     finally:
         if scheduler:
             scheduler.shutdown(wait=False)
+        if lock_acquired:
+            release_scheduler_lock()
+        set_scheduler_active(False)
         db.close_engine()
         logger.info("Application shutdown", extra={"env": settings.app_env})
 

@@ -3,6 +3,8 @@ from decimal import Decimal
 
 import pytest
 
+from sqlalchemy.exc import IntegrityError
+
 from app.models.audit import AuditLog
 from app.models.escrow import EscrowDeposit
 from app.models.user import User
@@ -162,6 +164,31 @@ async def test_deposit_idempotent_key_creates_single_row(client, auth_headers, d
     deposits = db_session.query(EscrowDeposit).filter(EscrowDeposit.escrow_id == escrow_id).all()
     assert len(deposits) == 1
     assert deposits[0].idempotency_key == "escrow-deposit-test"
+
+
+def test_raw_deposit_without_idempotency_key_fails(db_session):
+    client = User(username="deposit-client", email="deposit-client@example.com")
+    provider = User(username="deposit-provider", email="deposit-provider@example.com")
+    db_session.add_all([client, provider])
+    db_session.flush()
+
+    escrow = escrow_service.create_escrow(
+        db_session,
+        EscrowCreate(
+            client_id=client.id,
+            provider_id=provider.id,
+            amount_total=Decimal("10.00"),
+            currency="USD",
+            release_conditions={},
+            deadline_at=utcnow() + timedelta(days=2),
+        ),
+    )
+
+    deposit = EscrowDeposit(escrow_id=escrow.id, amount=Decimal("5.00"))
+    db_session.add(deposit)
+
+    with pytest.raises(IntegrityError):
+        db_session.flush()
 
 
 @pytest.mark.anyio("asyncio")
