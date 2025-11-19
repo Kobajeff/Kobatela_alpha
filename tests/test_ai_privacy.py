@@ -25,8 +25,8 @@ def test_sanitize_context_masks_sensitive_fields():
     sanitized = _sanitize_context(context)
 
     masked_meta = sanitized["document_context"].get("metadata") or {}
-    assert "iban_full" not in masked_meta
-    assert "email" not in masked_meta
+    assert masked_meta["iban_full"] == "***masked***"
+    assert masked_meta["email"] == "***masked***"
     assert masked_meta["supplier_name"] == "Very Sensitive Supplier"
     assert sanitized["mandate_context"]["beneficiary_name"] == "***masked***"
     assert sanitized["backend_checks"]["iban_check"] is True

@@ -1,5 +1,6 @@
 """Schemas for proof entities."""
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,6 +33,9 @@ class ProofRead(BaseModel):
     ai_checked_at: datetime | None = None
     ai_reviewed_by: str | None = None
     ai_reviewed_at: datetime | None = None
+
+    invoice_total_amount: Decimal | None = None
+    invoice_currency: str | None = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 

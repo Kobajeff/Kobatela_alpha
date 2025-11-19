@@ -15,9 +15,17 @@ from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
 from app.utils.masking import mask_metadata_for_ai, mask_proof_metadata
 
 try:
-    from openai import OpenAI  # type: ignore[import-not-found]
+    from openai import (  # type: ignore[import-not-found]
+        APITimeoutError,
+        APIError,
+        RateLimitError,
+        OpenAI,
+    )
 except Exception:  # noqa: BLE001
-    OpenAI = None  
+    OpenAI = None
+    APIError = None
+    RateLimitError = None
+    APITimeoutError = None
 
 logger = logging.getLogger(__name__)
 
@@ -351,6 +359,36 @@ def call_ai_proof_advisor(
         return result
 
     except Exception as exc:  # noqa: BLE001
+        if RateLimitError and isinstance(exc, RateLimitError):
+            logger.warning("AI proof advisor rate limited", extra={"error": str(exc)})
+            return _fallback_response(
+                flags=["rate_limited_or_timeout"],
+                score=0.4,
+                explanation=(
+                    "L'analyse automatique a échoué en raison d'une limite de requêtes ou d'un délai dépassé. "
+                    "Une revue manuelle est recommandée."
+                ),
+            )
+        if APITimeoutError and isinstance(exc, APITimeoutError):
+            logger.warning("AI proof advisor timeout", extra={"error": str(exc)})
+            return _fallback_response(
+                flags=["rate_limited_or_timeout"],
+                score=0.4,
+                explanation=(
+                    "L'analyse automatique a dépassé le délai autorisé. Merci de vérifier cette preuve manuellement."
+                ),
+            )
+        if APIError and isinstance(exc, APIError):
+            logger.exception("AI proof advisor API error: %s", exc)
+            return _fallback_response(
+                flags=["api_error"],
+                score=0.4,
+                explanation=(
+                    "L'analyse automatique n'a pas pu être effectuée en raison d'une erreur du fournisseur d'IA. "
+                    "Merci de procéder à une revue manuelle."
+                ),
+            )
+
         logger.exception("AI proof advisor call failed: %s", exc)
         logger.warning("AI proof advisor fallback response emitted", extra={"reason": "exception_during_call"})
         return _fallback_response(

@@ -112,11 +112,29 @@ def mask_proof_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]
 INVOICE_AI_ALLOWED_FIELDS = {
     "invoice_total_amount",
     "invoice_currency",
+    "invoice_number",
     "invoice_date",
     "supplier_name",
     "supplier_city",
     "supplier_country",
-    "line_items_summary",
+    "gps_lat",
+    "gps_lng",
+    "exif_timestamp",
+    "source",
+    "file_mime_type",
+    "file_pages",
+}
+
+SENSITIVE_METADATA_KEYS = {
+    "iban",
+    "iban_full",
+    "iban_full_masked",
+    "iban_last4",
+    "account_number",
+    "email",
+    "phone",
+    "mobile",
+    "address",
 }
 
 
@@ -127,9 +145,14 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
 
     safe: dict[str, Any] = {}
-    for key in INVOICE_AI_ALLOWED_FIELDS:
-        if key in metadata:
-            safe[key] = metadata[key]
+    for key, value in metadata.items():
+        lower = key.lower()
+        if lower in SENSITIVE_METADATA_KEYS:
+            safe[key] = MASKED_PLACEHOLDER
+            continue
+
+        if lower in INVOICE_AI_ALLOWED_FIELDS:
+            safe[key] = value
     return safe
 
 
