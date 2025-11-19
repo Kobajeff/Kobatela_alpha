@@ -26,17 +26,27 @@ def _psp_webhook_secret_status() -> str:
 
 
 
+def _secret_status(primary: str | None, secondary: str | None) -> str:
+    if primary and secondary:
+        return "ok"
+    if primary or secondary:
+        return "partial"
+    return "missing"
+
+
 @router.get("", summary="Health check")
 def healthcheck() -> dict[str, object]:
-    """Return a simple health payload."""
+    """Return a simple health payload with AI/OCR telemetry."""
 
     settings = get_settings()
+    primary_secret = settings.psp_webhook_secret
+    secondary_secret = settings.psp_webhook_secret_next
     return {
         "status": "ok",
-        "psp_webhook_configured": bool(settings.psp_webhook_secret or settings.psp_webhook_secret_next),
+        "psp_webhook_configured": bool(primary_secret or secondary_secret),
+        "psp_webhook_secret_status": _secret_status(primary_secret, secondary_secret),
         "ocr_enabled": bool(settings.INVOICE_OCR_ENABLED),
         "ai_proof_enabled": ai_enabled(),
         "scheduler_config_enabled": SCHEDULER_ENABLED,
         "scheduler_running": is_scheduler_active(),
-        "psp_webhook_secret_status": _psp_webhook_secret_status(),
     }

@@ -1,7 +1,7 @@
 """Simple DB-backed lock to ensure only one scheduler runs."""
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +21,8 @@ def _session(db_session: Session | None = None) -> tuple[Session | None, bool]:
         return db_session, False
     session_factory = db.SessionLocal
     if session_factory is None:
+        session_factory = db.get_sessionmaker()
+    if session_factory is None:
         return None, False
     return session_factory(), True
 
@@ -36,7 +38,12 @@ def try_acquire_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | N
         now = utcnow()
         existing = session.execute(select(SchedulerLock).where(SchedulerLock.name == name)).scalar_one_or_none()
         if existing:
-            if (now - existing.acquired_at) > LOCK_TTL:
+            acquired_at = existing.acquired_at
+            if acquired_at.tzinfo is None:
+                acquired_at = acquired_at.replace(tzinfo=UTC)
+            else:
+                acquired_at = acquired_at.astimezone(UTC)
+            if (now - acquired_at) > LOCK_TTL:
                 session.delete(existing)
                 session.commit()
             else:
