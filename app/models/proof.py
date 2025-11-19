@@ -1,7 +1,8 @@
 """Proof model definitions."""
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, Float, ForeignKey, JSON, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -24,6 +25,16 @@ class Proof(Base):
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    # Normalised invoice fields extracted from metadata/OCR
+    invoice_total_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2, asdecimal=True),
+        nullable=True,
+    )
+    invoice_currency: Mapped[str | None] = mapped_column(
+        String(3),
+        nullable=True,
+    )
 
     # AI Proof Advisor fields
     ai_risk_level: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)

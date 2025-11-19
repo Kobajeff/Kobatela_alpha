@@ -18,15 +18,21 @@ from app.services.cron import expire_mandates_once
 from app.services.scheduler_lock import release_scheduler_lock, try_acquire_scheduler_lock
 from app.utils.errors import error_response
 
-settings = get_settings()
 logger = get_logger(__name__)
 scheduler: AsyncIOScheduler | None = None
 ALLOWED_CREATE_ENV = {"dev", "local", "test"}
+
+
+def _current_settings():
+    """Return fresh settings (TTL-cached within get_settings)."""
+
+    return get_settings()
 
 # -------- Lifespan (nouveau mécanisme) --------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
+    settings = _current_settings()
     logger.info("Application startup", extra={"env": settings.app_env})
     if not (settings.psp_webhook_secret or settings.psp_webhook_secret_next):
         logger.error(
@@ -100,23 +106,24 @@ app_info = AppInfo()
 app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
 
 # Middleware & routes
+bootstrap_settings = _current_settings()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ALLOW_ORIGINS,
+    allow_origins=bootstrap_settings.CORS_ALLOW_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
 
-if settings.PROMETHEUS_ENABLED:
+if bootstrap_settings.PROMETHEUS_ENABLED:
     from starlette_exporter import PrometheusMiddleware, handle_metrics
 
     app.add_middleware(PrometheusMiddleware)
     app.add_route("/metrics", handle_metrics)
 
-if settings.SENTRY_DSN:
+if bootstrap_settings.SENTRY_DSN:
     import sentry_sdk
 
-    sentry_sdk.init(dsn=settings.SENTRY_DSN, traces_sample_rate=0.2)
+    sentry_sdk.init(dsn=bootstrap_settings.SENTRY_DSN, traces_sample_rate=0.2)
 app.include_router(get_api_router())
 app.include_router(apikeys.router)
 
