@@ -1,6 +1,7 @@
 """End-to-end test for proof approval and payment execution."""
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
@@ -17,6 +18,47 @@ from app.models import (
 )
 from app.schemas.proof import ProofCreate
 from app.services import proofs as proofs_service
+
+
+def _create_pdf_milestone(db_session):
+    """Create a simple escrow + PDF milestone for proof submissions."""
+
+    client = User(
+        username=f"client-{uuid4().hex[:8]}",
+        email=f"client-{uuid4().hex[:8]}@example.com",
+    )
+    provider = User(
+        username=f"provider-{uuid4().hex[:8]}",
+        email=f"provider-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add_all([client, provider])
+    db_session.flush()
+
+    escrow = EscrowAgreement(
+        client_id=client.id,
+        provider_id=provider.id,
+        amount_total=Decimal("100.00"),
+        currency="USD",
+        status=EscrowStatus.FUNDED,
+        release_conditions_json={"type": "milestone"},
+        deadline_at=datetime.now(tz=UTC),
+    )
+    db_session.add(escrow)
+    db_session.flush()
+
+    milestone = Milestone(
+        escrow_id=escrow.id,
+        idx=1,
+        label="Invoice",
+        amount=Decimal("25.00"),
+        proof_type="PDF",
+        validator="SENDER",
+        status=MilestoneStatus.WAITING,
+    )
+    db_session.add(milestone)
+    db_session.commit()
+
+    return escrow, milestone
 
 
 @pytest.mark.anyio("asyncio")
@@ -173,3 +215,65 @@ def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
         assert proof.metadata_["ai_assessment"] == stub_result
     finally:
         settings.AI_PROOF_ADVISOR_ENABLED = original_flag
+
+
+def test_submit_proof_uses_ocr_invoice_fields(monkeypatch, db_session):
+    escrow, milestone = _create_pdf_milestone(db_session)
+
+    def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
+        enriched = dict(existing_metadata or {})
+        enriched.setdefault("invoice_total_amount", Decimal("321.00"))
+        enriched.setdefault("invoice_currency", "eur")
+        return enriched
+
+    monkeypatch.setattr(
+        proofs_service,
+        "enrich_metadata_with_invoice_ocr",
+        fake_enrich,
+    )
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://storage.example.com/proofs/doc.pdf",
+        sha256="hash-invoice-proof",
+        metadata={},
+    )
+
+    proof = proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+    db_session.refresh(proof)
+
+    assert proof.invoice_total_amount == Decimal("321.00")
+    assert proof.invoice_currency == "EUR"
+
+
+def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
+    escrow, milestone = _create_pdf_milestone(db_session)
+
+    def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
+        enriched = dict(existing_metadata or {})
+        enriched.setdefault("invoice_total_amount", Decimal("999.99"))
+        enriched.setdefault("invoice_currency", "eur")
+        return enriched
+
+    monkeypatch.setattr(
+        proofs_service,
+        "enrich_metadata_with_invoice_ocr",
+        fake_enrich,
+    )
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://storage.example.com/proofs/doc.pdf",
+        sha256="hash-invoice-proof-user",
+        metadata={"invoice_total_amount": "150.50", "invoice_currency": "gbp"},
+    )
+
+    proof = proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+    db_session.refresh(proof)
+
+    assert proof.invoice_total_amount == Decimal("150.50")
+    assert proof.invoice_currency == "GBP"

@@ -33,7 +33,7 @@ from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
-from typing import Any, Final
+from typing import Any, Final, Mapping, Sequence
 
 HARD_VALIDATION_ERRORS: Final = {
     "OUT_OF_GEOFENCE",
@@ -46,6 +46,52 @@ HARD_VALIDATION_ERRORS: Final = {
 
 AI_PROOF_ENABLED: Final[bool] = os.getenv("KCT_AI_PROOF_ENABLED", "0") == "1"
 logger = logging.getLogger(__name__)
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {k: _json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
+
+
+def _json_safe_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if metadata is None:
+        return None
+    return {key: _json_safe_value(value) for key, value in dict(metadata).items()}
+
+
+def _extract_invoice_fields(
+    metadata: Mapping[str, Any] | None,
+) -> tuple[Decimal | None, str | None]:
+    """Return normalized invoice amount/currency extracted from metadata."""
+
+    if not isinstance(metadata, Mapping):
+        return None, None
+
+    invoice_total_amount: Decimal | None = None
+    invoice_currency: str | None = None
+
+    raw_amount = metadata.get("invoice_total_amount") or metadata.get(
+        "ocr_invoice_total_amount"
+    )
+    raw_currency = metadata.get("invoice_currency") or metadata.get(
+        "ocr_invoice_currency"
+    )
+
+    if raw_amount is not None:
+        try:
+            invoice_total_amount = Decimal(str(raw_amount))
+        except Exception:  # noqa: BLE001
+            invoice_total_amount = None
+
+    if isinstance(raw_currency, str) and len(raw_currency.strip()) == 3:
+        invoice_currency = raw_currency.strip().upper()
+
+    return invoice_total_amount, invoice_currency
 
 
 def submit_proof(
@@ -93,6 +139,9 @@ def submit_proof(
             storage_url=payload.storage_url,
             existing_metadata=metadata_payload,
         )
+
+    invoice_total_amount, invoice_currency = _extract_invoice_fields(metadata_payload)
+    metadata_payload = _json_safe_metadata(metadata_payload) or {}
     review_reason: str | None = None
     auto_approve = False
 

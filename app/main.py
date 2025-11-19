@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import db  # moteur/metadata centralisés
-from app.config import AppInfo, SCHEDULER_ENABLED, get_settings
+from app.config import AppInfo, get_settings
 from app.core.logging import get_logger, setup_logging
 from app.core.runtime_state import set_scheduler_active
 import app.models  # enregistre les tables
@@ -27,6 +27,29 @@ def _current_settings():
     """Return fresh settings (TTL-cached within get_settings)."""
 
     return get_settings()
+
+
+def _configure_middlewares(fastapi_app: FastAPI) -> None:
+    """Configure middleware using a fresh snapshot of the settings."""
+
+    runtime_settings = _current_settings()
+    fastapi_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=runtime_settings.CORS_ALLOW_ORIGINS,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
+    )
+
+    if runtime_settings.PROMETHEUS_ENABLED:
+        from starlette_exporter import PrometheusMiddleware, handle_metrics
+
+        fastapi_app.add_middleware(PrometheusMiddleware)
+        fastapi_app.add_route("/metrics", handle_metrics)
+
+    if runtime_settings.SENTRY_DSN:
+        import sentry_sdk
+
+        sentry_sdk.init(dsn=runtime_settings.SENTRY_DSN, traces_sample_rate=0.2)
 
 # -------- Lifespan (nouveau mécanisme) --------
 @asynccontextmanager
@@ -66,7 +89,7 @@ async def lifespan(app: FastAPI):
     # Lancer le scheduler uniquement sur l'instance désignée (cf. déploiement multi-runner).
     set_scheduler_active(False)
     lock_acquired = False
-    if SCHEDULER_ENABLED:
+    if settings.SCHEDULER_ENABLED:
         lock_acquired = try_acquire_scheduler_lock()
         if lock_acquired:
             global scheduler
@@ -106,24 +129,7 @@ app_info = AppInfo()
 app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
 
 # Middleware & routes
-bootstrap_settings = _current_settings()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=bootstrap_settings.CORS_ALLOW_ORIGINS,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
-)
-
-if bootstrap_settings.PROMETHEUS_ENABLED:
-    from starlette_exporter import PrometheusMiddleware, handle_metrics
-
-    app.add_middleware(PrometheusMiddleware)
-    app.add_route("/metrics", handle_metrics)
-
-if bootstrap_settings.SENTRY_DSN:
-    import sentry_sdk
-
-    sentry_sdk.init(dsn=bootstrap_settings.SENTRY_DSN, traces_sample_rate=0.2)
+_configure_middlewares(app)
 app.include_router(get_api_router())
 app.include_router(apikeys.router)
 
