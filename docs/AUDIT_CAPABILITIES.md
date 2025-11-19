@@ -1,4 +1,4 @@
-# Kobatela_alpha — Capability & Stability Audit (2025-11-19)
+# Kobatela_alpha — Capability & Stability Audit (2025-11-18)
 
 ## A. Executive summary
 - API-key enforcement with scope-aware dependencies guards every router, and sensitive escrow reads now emit `ESCROW_READ` audit records so actors are traceable end to end (`app/routers/*`, `app/services/escrow.py`).
@@ -131,7 +131,7 @@ Readiness score: **82 / 100** — strong controls overall, but DB-level deposit 
 - Document proof AI contexts embed both OCR-enriched metadata and backend check signals, ensuring GPT receives structured cues rather than raw documents (`app/services/proofs.py`).
 
 ### I.4 AI/OCR-specific risks
-| ID | Domain (AI/OCR) | Risk | Impact | Likelihood | Priority | Recommended fix |
+| ID | Domain | Risk | Impact | Likelihood | Priority | Recommended fix |
 | --- | --- | --- | --- | --- | --- | --- |
 | AI-1 | AI toggles | Cached settings require restarts to change AI behavior, risking inconsistent enforcement across replicas. | Medium | Medium | P0 | Refresh settings per request or memoize with TTL; add admin endpoint to flip AI flags with audit logging.
 | AI-2 | OCR visibility | OCR stub returns `{}` silently and metadata lacks `ocr_status`, so reviewers may assume OCR ran when disabled. | Medium | Medium | P1 | Record `ocr_status` + provider metadata, emit metrics, and display status in reviewer UI/API.
