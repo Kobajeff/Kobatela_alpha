@@ -33,10 +33,24 @@ def _psp_secrets() -> dict[str, str | None]:
     }
 
 
+def _masked_secret_status(secrets_info: dict[str, str | None]) -> dict[str, str | None]:
+    """Return deterministic markers instead of raw secrets for logging."""
+
+    masked: dict[str, str | None] = {}
+    for name, secret in secrets_info.items():
+        if not secret:
+            masked[name] = None
+            continue
+
+        digest = hashlib.sha256(secret.encode()).hexdigest()[:8]
+        masked[name] = f"sha256:{digest}"
+    return masked
+
+
 def _log_signature_failure(reason: str, *, secrets_info: dict[str, str | None]) -> None:
     logger.warning(
         "PSP signature verification failed",
-        extra={"reason": reason, "psp_secret_status": secrets_info},
+        extra={"reason": reason, "psp_secret_status": _masked_secret_status(secrets_info)},
     )
 
 
