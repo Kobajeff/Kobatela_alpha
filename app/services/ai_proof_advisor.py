@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
 from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
-from app.utils.masking import mask_proof_metadata
+from app.utils.masking import mask_metadata_for_ai, mask_proof_metadata
 
 try:
     from openai import OpenAI  # type: ignore[import-not-found]
@@ -216,7 +216,13 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
     url = doc.get("storage_url")
     if isinstance(url, str):
         doc["storage_url"] = url.rsplit("/", 1)[-1]
-    ctx["document_context"] = mask_proof_metadata(doc) or {}
+    metadata_for_ai = mask_metadata_for_ai(doc.get("metadata"))
+    masked_doc = mask_proof_metadata(doc) or {}
+    if metadata_for_ai:
+        masked_doc["metadata"] = metadata_for_ai
+    else:
+        masked_doc.pop("metadata", None)
+    ctx["document_context"] = masked_doc
     ctx["mandate_context"] = mask_proof_metadata(ctx.get("mandate_context") or {}) or {}
     ctx["backend_checks"] = mask_proof_metadata(ctx.get("backend_checks") or {}) or {}
     return ctx

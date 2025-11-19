@@ -61,3 +61,30 @@ def test_enrich_metadata_never_overwrites_existing_fields(monkeypatch):
     # new fields are still populated when absent
     assert result["invoice_total_raw"] == "123.45"
     assert result["invoice_supplier_name"] == "ACME"
+
+
+def test_enrich_metadata_normalizes_currency(monkeypatch):
+    stub = _stub_settings(True, "stub-provider")
+    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
+    monkeypatch.setattr(
+        "app.services.invoice_ocr._call_external_ocr_provider",
+        lambda storage_url: {"currency": "eur"},
+    )
+
+    result = enrich_metadata_with_invoice_ocr(storage_url="s3://invoice", existing_metadata={})
+
+    assert result["invoice_currency"] == "EUR"
+
+
+def test_enrich_metadata_preserves_user_currency(monkeypatch):
+    stub = _stub_settings(True, "stub-provider")
+    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
+    monkeypatch.setattr(
+        "app.services.invoice_ocr._call_external_ocr_provider",
+        lambda storage_url: {"currency": "eur"},
+    )
+
+    existing = {"invoice_currency": "USD"}
+    result = enrich_metadata_with_invoice_ocr(storage_url="s3://invoice", existing_metadata=existing)
+
+    assert result["invoice_currency"] == "USD"

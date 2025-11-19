@@ -109,4 +109,28 @@ def mask_proof_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]
     return _mask_mapping(metadata)
 
 
-__all__ = ["mask_proof_metadata"]
+INVOICE_AI_ALLOWED_FIELDS = {
+    "invoice_total_amount",
+    "invoice_currency",
+    "invoice_date",
+    "supplier_name",
+    "supplier_city",
+    "supplier_country",
+    "line_items_summary",
+}
+
+
+def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return a strict subset of metadata fields allowed for AI usage."""
+
+    if not isinstance(metadata, Mapping):
+        return {}
+
+    safe: dict[str, Any] = {}
+    for key in INVOICE_AI_ALLOWED_FIELDS:
+        if key in metadata:
+            safe[key] = metadata[key]
+    return safe
+
+
+__all__ = ["mask_proof_metadata", "mask_metadata_for_ai"]

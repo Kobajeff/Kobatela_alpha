@@ -42,6 +42,7 @@ class Settings(BaseSettings):
         default=DEV_API_KEY,
         validation_alias=AliasChoices("DEV_API_KEY", "API_KEY"),
     )
+    DEV_API_KEY_ALLOWED: bool = DEV_API_KEY_ALLOWED
     CORS_ALLOW_ORIGINS: list[str] = [
         "https://kobatela.com",
         "https://app.kobatela.com",
@@ -64,6 +65,10 @@ class Settings(BaseSettings):
     INVOICE_OCR_ENABLED: bool = False
     INVOICE_OCR_PROVIDER: str = "none"
     INVOICE_OCR_API_KEY: str | None = None
+
+    # --- Scheduler -------------------------------------------------------
+    SCHEDULER_ENABLED: bool = SCHEDULER_ENABLED
+    SCHEDULER_CRON: str = SCHEDULER_CRON
 
     # --- Lifespan safeguards --------------------------------------------
     ALLOW_DB_CREATE_ALL: bool = False

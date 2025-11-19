@@ -24,11 +24,10 @@ def test_sanitize_context_masks_sensitive_fields():
 
     sanitized = _sanitize_context(context)
 
-    masked_meta = sanitized["document_context"]["metadata"]
-    assert masked_meta["iban_full"].endswith("7890")
-    assert masked_meta["iban_full"] != "FR761234567890"
-    assert masked_meta["supplier_name"] == "***masked***"
-    assert masked_meta["email"].startswith("***@")
+    masked_meta = sanitized["document_context"].get("metadata") or {}
+    assert "iban_full" not in masked_meta
+    assert "email" not in masked_meta
+    assert masked_meta["supplier_name"] == "Very Sensitive Supplier"
     assert sanitized["mandate_context"]["beneficiary_name"] == "***masked***"
     assert sanitized["backend_checks"]["iban_check"] is True
 

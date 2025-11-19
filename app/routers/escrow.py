@@ -3,12 +3,14 @@ from fastapi import APIRouter, Body, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.api_key import ApiKey, ApiScope
+from app.models.audit import AuditLog
 from app.models.escrow import EscrowAgreement
 from app.schemas.escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate, EscrowRead
-from app.models.api_key import ApiKey, ApiScope
 from app.security import require_scope
 from app.services import escrow as escrow_service
 from app.utils.audit import actor_from_api_key
+from app.utils.time import utcnow
 
 router = APIRouter(
     prefix="/escrows",
@@ -90,4 +92,16 @@ def read_escrow(
     api_key: ApiKey = Depends(require_scope({ApiScope.sender, ApiScope.support, ApiScope.admin})),
 ) -> EscrowAgreement:
     actor = actor_from_api_key(api_key, fallback="apikey:unknown")
-    return escrow_service.get_escrow(db, escrow_id, actor=actor)
+    escrow = escrow_service.get_escrow(db, escrow_id, actor=actor)
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="READ_ESCROW",
+            entity="EscrowAgreement",
+            entity_id=escrow_id,
+            data_json={"endpoint": "GET /escrows/{id}"},
+            at=utcnow(),
+        )
+    )
+    db.commit()
+    return escrow
