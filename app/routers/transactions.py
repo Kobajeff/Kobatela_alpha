@@ -101,7 +101,7 @@ def get_transaction(
 ) -> Transaction:
     """Retrieve transaction details (admin only)."""
 
-    transaction = db.get(Transaction, transaction_id)
+    transaction = transactions_service.get_transaction(db, transaction_id)
     if not transaction:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
