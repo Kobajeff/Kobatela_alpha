@@ -34,6 +34,14 @@ def _secret_status(primary: str | None, secondary: str | None) -> str:
     return "missing"
 
 
+def _secret_status(primary: str | None, secondary: str | None) -> str:
+    if primary and secondary:
+        return "ok"
+    if primary or secondary:
+        return "partial"
+    return "missing"
+
+
 @router.get("", summary="Health check")
 def healthcheck() -> dict[str, object]:
     """Return a simple health payload with AI/OCR telemetry."""
