@@ -117,23 +117,6 @@ def submit_proof(
     invoice_total_amount: Decimal | None = None
     invoice_currency: str | None = None
 
-    if isinstance(metadata_payload, dict):
-        raw_amount = metadata_payload.get("invoice_total_amount") or metadata_payload.get(
-            "ocr_invoice_total_amount"
-        )
-        raw_currency = metadata_payload.get("invoice_currency") or metadata_payload.get(
-            "ocr_invoice_currency"
-        )
-
-        if raw_amount is not None:
-            try:
-                invoice_total_amount = Decimal(str(raw_amount))
-            except Exception:  # noqa: BLE001
-                invoice_total_amount = None
-
-        if isinstance(raw_currency, str) and len(raw_currency.strip()) == 3:
-            invoice_currency = raw_currency.strip().upper()
-
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
         metadata_payload = enrich_metadata_with_invoice_ocr(
             storage_url=payload.storage_url,
@@ -225,17 +208,21 @@ def submit_proof(
                 try:
                     ai_context = {
                         "mandate_context": {
-                            "escrow_id": payload.escrow_id,
-                            "milestone_idx": payload.milestone_idx,
-                            "milestone_label": milestone.label,
-                            "milestone_amount": float(milestone.amount),
-                            "proof_type": milestone.proof_type,
-                            "proof_requirements": getattr(milestone, "proof_requirements", None),
-                        },
-                        "backend_checks": {
-                            "has_metadata": payload.metadata is not None,
-                            "geofence_configured": geofence is not None,
-                            "validation_ok": bool(ok),
+                        "escrow_id": payload.escrow_id,
+                        "milestone_idx": payload.milestone_idx,
+                        "milestone_label": milestone.label,
+                        "milestone_amount": float(milestone.amount),
+                        "proof_type": milestone.proof_type,
+                        "proof_requirements": getattr(milestone, "proof_requirements", None),
+                        "invoice_total_amount": float(invoice_total_amount)
+                        if invoice_total_amount is not None
+                        else None,
+                        "invoice_currency": invoice_currency,
+                    },
+                    "backend_checks": {
+                        "has_metadata": payload.metadata is not None,
+                        "geofence_configured": geofence is not None,
+                        "validation_ok": bool(ok),
                             "validation_reason": reason,
                         },
                         "document_context": {
@@ -280,6 +267,10 @@ def submit_proof(
                         "milestone_amount": float(milestone.amount),
                         "proof_type": milestone.proof_type,
                         "proof_requirements": proof_reqs,
+                        "invoice_total_amount": float(invoice_total_amount)
+                        if invoice_total_amount is not None
+                        else None,
+                        "invoice_currency": invoice_currency,
                     },
                     "backend_checks": backend_checks,
                     "document_context": {
@@ -462,6 +453,18 @@ def decide_proof(
 
     updated.ai_reviewed_by = actor or "system"
     updated.ai_reviewed_at = utcnow()
+    db.add(
+        AuditLog(
+            actor=actor or "system",
+            action="DECIDE_PROOF",
+            entity="Proof",
+            entity_id=updated.id,
+            data_json=sanitize_payload_for_audit(
+                {"decision": target, "note": note, "proof_id": updated.id}
+            ),
+            at=utcnow(),
+        )
+    )
     db.add(updated)
     db.commit()
     db.refresh(updated)
