@@ -1,5 +1,5 @@
 """Escrow agreement endpoints."""
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Body, Depends, Header, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -8,7 +8,6 @@ from app.schemas.escrow import EscrowActionPayload, EscrowCreate, EscrowDepositC
 from app.models.api_key import ApiKey, ApiScope
 from app.security import require_scope
 from app.services import escrow as escrow_service
-from app.utils.errors import error_response
 from app.utils.audit import actor_from_api_key
 
 router = APIRouter(
@@ -32,7 +31,7 @@ def deposit(
     escrow_id: int,
     payload: EscrowDepositCreate,
     db: Session = Depends(get_db),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str = Header(alias="Idempotency-Key"),
     api_key: ApiKey = Depends(require_scope({ApiScope.sender})),
 ) -> EscrowAgreement:
     actor = actor_from_api_key(api_key, fallback="apikey:unknown")
@@ -85,8 +84,10 @@ def check_deadline(
 
 
 @router.get("/{escrow_id}", response_model=EscrowRead)
-def read_escrow(escrow_id: int, db: Session = Depends(get_db)) -> EscrowAgreement:
-    agreement = db.get(EscrowAgreement, escrow_id)
-    if not agreement:
-        raise HTTPException(status_code=404, detail=error_response("ESCROW_NOT_FOUND", "Escrow not found."))
-    return agreement
+def read_escrow(
+    escrow_id: int,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.sender, ApiScope.support, ApiScope.admin})),
+) -> EscrowAgreement:
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    return escrow_service.get_escrow(db, escrow_id, actor=actor)

@@ -3,7 +3,7 @@ import logging
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -106,7 +106,7 @@ def deposit(
     escrow_id: int,
     payload: EscrowDepositCreate,
     *,
-    idempotency_key: str | None,
+    idempotency_key: str,
     actor: str | None = None,
 ) -> EscrowAgreement:
     """Deposit funds into an escrow agreement."""
@@ -115,17 +115,28 @@ def deposit(
     if not agreement:
         raise HTTPException(status_code=404, detail=error_response("ESCROW_NOT_FOUND", "Escrow not found."))
 
-    if idempotency_key:
-        existing = get_existing_by_key(db, EscrowDeposit, idempotency_key)
-        if existing:
-            logger.info("Idempotent escrow deposit reused", extra={"escrow_id": escrow_id, "deposit_id": existing.id})
-            db.refresh(agreement)
-            return agreement
+    normalized_key = (idempotency_key or "").strip()
+    if not normalized_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /escrows/{id}/deposit.",
+            ),
+        )
+
+    existing = get_existing_by_key(db, EscrowDeposit, normalized_key)
+    if existing:
+        logger.info(
+            "Idempotent escrow deposit reused", extra={"escrow_id": escrow_id, "deposit_id": existing.id}
+        )
+        db.refresh(agreement)
+        return agreement
 
     # --- CAST ICI ---
     amount_dec = _to_decimal(payload.amount)
 
-    deposit = EscrowDeposit(escrow_id=agreement.id, amount=amount_dec, idempotency_key=idempotency_key)
+    deposit = EscrowDeposit(escrow_id=agreement.id, amount=amount_dec, idempotency_key=normalized_key)
     try:
         db.add(deposit)
 
@@ -137,8 +148,7 @@ def deposit(
             agreement.status = EscrowStatus.FUNDED
 
         event_payload = {"amount": str(amount_dec)}
-        if idempotency_key:
-            event_payload["idempotency_key"] = idempotency_key
+        event_payload["idempotency_key"] = normalized_key
         event = EscrowEvent(
             escrow_id=agreement.id,
             kind="DEPOSIT",
@@ -154,7 +164,7 @@ def deposit(
             data={
                 "amount": str(amount_dec),
                 "status": agreement.status.value,
-                "idempotency_key": idempotency_key,
+                "idempotency_key": normalized_key,
             },
         )
         db.commit()
@@ -163,16 +173,36 @@ def deposit(
         return agreement
     except IntegrityError:
         db.rollback()
-        if idempotency_key:
-            existing = get_existing_by_key(db, EscrowDeposit, idempotency_key)
-            if existing:
-                logger.info(
-                    "Idempotent escrow deposit reused after race",
-                    extra={"escrow_id": escrow_id, "deposit_id": existing.id},
-                )
-                db.refresh(agreement)
-                return agreement
+        existing = get_existing_by_key(db, EscrowDeposit, normalized_key)
+        if existing:
+            logger.info(
+                "Idempotent escrow deposit reused after race",
+                extra={"escrow_id": escrow_id, "deposit_id": existing.id},
+            )
+            db.refresh(agreement)
+            return agreement
         raise
+
+
+def get_escrow(
+    db: Session,
+    escrow_id: int,
+    *,
+    actor: str | None = None,
+) -> EscrowAgreement:
+    """Return a single escrow agreement and audit the sensitive read."""
+
+    agreement = _get_escrow_or_404(db, escrow_id)
+    _audit(
+        db,
+        actor=actor or "system",
+        action="ESCROW_READ",
+        escrow=agreement,
+        data={"status": agreement.status.value},
+    )
+    db.commit()
+    db.refresh(agreement)
+    return agreement
 
 
 def mark_delivered(
