@@ -1,8 +1,20 @@
 """Backend document checks for AI advisory context."""
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 from datetime import date, datetime
 from typing import Any, Dict, Optional
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    """Convert any raw numeric input into a Decimal, returning None on failure."""
+
+    if value is None:
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
 
 
 def _parse_date(value: Any) -> Optional[date]:
@@ -40,37 +52,40 @@ def compute_document_backend_checks(
     }
 
     # -------- 1) AMOUNT / CURRENCY --------
-    expected_amount = proof_requirements.get("expected_amount")
+    expected_amount_raw = proof_requirements.get("expected_amount")
+    expected_amount = _to_decimal(expected_amount_raw)
     expected_currency = proof_requirements.get("expected_currency")
 
-    invoice_amount = metadata.get("invoice_total_amount")
+    invoice_amount = _to_decimal(metadata.get("invoice_total_amount"))
     if invoice_amount is None:
-        invoice_amount = metadata.get("invoice_amount")
+        invoice_amount = _to_decimal(metadata.get("invoice_amount"))
     invoice_currency = metadata.get("invoice_currency")
 
     amount_check: Dict[str, Any] = {
-        "expected_amount": expected_amount,
+        "expected_amount": expected_amount if expected_amount is not None else expected_amount_raw,
         "invoice_amount": invoice_amount,
         "absolute_diff": None,
         "relative_diff": None,
         "currency_expected": expected_currency,
         "currency_actual": invoice_currency,
         "currency_match": None,
+        "amount_match": None,
     }
 
     if expected_amount is not None and invoice_amount is not None:
-        try:
-            ea = float(expected_amount)
-            ia = float(invoice_amount)
-            diff = ia - ea
-            amount_check["absolute_diff"] = diff
-            if ea != 0:
-                amount_check["relative_diff"] = diff / ea
-        except (TypeError, ValueError):
-            pass
+        diff = invoice_amount - expected_amount
+        amount_check["absolute_diff"] = str(diff)
+        if expected_amount != 0:
+            try:
+                amount_check["relative_diff"] = str(diff / expected_amount)
+            except (InvalidOperation, ZeroDivisionError):
+                amount_check["relative_diff"] = None
+        amount_check["amount_match"] = diff == Decimal("0.00")
 
     if expected_currency and invoice_currency:
-        amount_check["currency_match"] = (expected_currency == invoice_currency)
+        amount_check["currency_match"] = (
+            str(expected_currency).upper() == str(invoice_currency).upper()
+        )
 
     checks["amount_check"] = amount_check
 
@@ -84,7 +99,7 @@ def compute_document_backend_checks(
     else:
         expected_iban_last4 = None
 
-    invoice_iban_last4 = metadata.get("iban_last4")
+    invoice_iban_last4 = metadata.get("invoice_iban_last4") or metadata.get("iban_last4")
 
     iban_check: Dict[str, Any] = {
         "expected_iban_last4": expected_iban_last4,
@@ -136,7 +151,7 @@ def compute_document_backend_checks(
         proof_requirements.get("expected_store_name")
         or proof_requirements.get("expected_beneficiary")
     )
-    supplier_name = metadata.get("supplier_name")
+    supplier_name = metadata.get("invoice_supplier_name") or metadata.get("supplier_name")
 
     supplier_check: Dict[str, Any] = {
         "expected_name": expected_store,
