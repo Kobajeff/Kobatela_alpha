@@ -50,7 +50,7 @@ class EscrowDeposit(Base):
 
     escrow_id: Mapped[int] = mapped_column(ForeignKey("escrow_agreements.id"), nullable=False, index=True)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    idempotency_key: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
 
     escrow = relationship("EscrowAgreement", back_populates="deposits")
 

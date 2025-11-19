@@ -16,7 +16,7 @@ from app.schemas.transaction import (
 )
 from app.security import require_scope
 from app.services import transactions as transactions_service
-from app.utils.audit import actor_from_api_key
+from app.utils.audit import actor_from_api_key, log_audit
 from app.utils.errors import error_response
 
 router = APIRouter(prefix="", tags=["transactions"])
@@ -97,7 +97,7 @@ def post_transaction(
 def get_transaction(
     transaction_id: int,
     db: Session = Depends(get_db),
-    _api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
 ) -> Transaction:
     """Retrieve transaction details (admin only)."""
 
@@ -107,4 +107,15 @@ def get_transaction(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=error_response("TRANSACTION_NOT_FOUND", "Transaction not found."),
         )
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    log_audit(
+        db,
+        actor=actor,
+        action="TRANSACTION_READ",
+        entity="Transaction",
+        entity_id=transaction.id,
+        data={"transaction_id": transaction.id},
+    )
+    db.commit()
+    db.refresh(transaction)
     return transaction

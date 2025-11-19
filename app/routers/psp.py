@@ -14,7 +14,6 @@ from app.services import psp_webhooks
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/psp", tags=["psp"])
-settings = get_settings()
 
 
 @router.post("/webhook", status_code=status.HTTP_200_OK)
@@ -26,6 +25,7 @@ async def psp_webhook(
     x_psp_event_id: str | None = Header(default=None),
     x_psp_ref: str | None = Header(default=None),
 ) -> dict[str, str]:
+    settings = get_settings()
     if not (settings.psp_webhook_secret or settings.psp_webhook_secret_next):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -19,7 +19,25 @@ from app.utils.audit import sanitize_payload_for_audit
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
-settings = get_settings()
+
+
+def _current_settings():
+    return get_settings()
+
+
+def _psp_secrets() -> dict[str, str | None]:
+    settings = _current_settings()
+    return {
+        "primary": settings.psp_webhook_secret,
+        "secondary": settings.psp_webhook_secret_next,
+    }
+
+
+def _log_signature_failure(reason: str, *, secrets_info: dict[str, str | None]) -> None:
+    logger.warning(
+        "PSP signature verification failed",
+        extra={"reason": reason, "psp_secret_status": secrets_info},
+    )
 
 
 def verify_signature(
@@ -31,23 +49,29 @@ def verify_signature(
 ) -> tuple[bool, str]:
     """Validate webhook signatures with HMAC rotation and timestamp skew protection."""
 
-    secrets = [settings.psp_webhook_secret, settings.psp_webhook_secret_next]
-    secrets = [s for s in secrets if s]
+    secrets_info = _psp_secrets()
+    secrets = [s for s in secrets_info.values() if s]
     if not secrets:
+        _log_signature_failure("secret-missing", secrets_info=secrets_info)
         return False, "secret-missing"
     if not signature:
+        _log_signature_failure("signature-missing", secrets_info=secrets_info)
         return False, "signature-missing"
     if not timestamp:
+        _log_signature_failure("timestamp-missing", secrets_info=secrets_info)
         return False, "timestamp-missing"
 
     try:
         sent_ts = float(timestamp)
     except (TypeError, ValueError):
+        _log_signature_failure("timestamp-invalid", secrets_info=secrets_info)
         return False, "timestamp-invalid"
 
+    settings = _current_settings()
     drift = skew_seconds or settings.psp_webhook_max_drift_seconds or 300
     now = time.time()
     if abs(now - sent_ts) > drift:
+        _log_signature_failure("timestamp-skew", secrets_info=secrets_info)
         return False, "timestamp-skew"
 
     payload = timestamp.encode() + b"." + body_bytes
@@ -56,6 +80,7 @@ def verify_signature(
         if hmac.compare_digest(digest, signature):
             return True, ""
 
+    _log_signature_failure("hmac-mismatch", secrets_info=secrets_info)
     return False, "hmac-mismatch"
 
 

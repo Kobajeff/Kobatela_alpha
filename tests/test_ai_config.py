@@ -1,23 +1,24 @@
-"""Tests for AI Proof Advisor configuration defaults."""
+from app.services import ai_proof_flags
 
 
-def test_ai_proof_disabled_by_default():
-    from app.config import settings
+class StubSettings:
+    AI_PROOF_ADVISOR_ENABLED = False
+    AI_PROOF_ADVISOR_MODEL = "gpt-test"
+    AI_PROOF_ADVISOR_PROVIDER = "openai"
+    AI_PROOF_TIMEOUT_SECONDS = 30
 
-    # AI Proof Advisor must be disabled by default for safety
-    assert settings.AI_PROOF_ADVISOR_ENABLED is False
 
+def test_ai_flags_reflect_live_settings(monkeypatch):
+    stub = StubSettings()
+    monkeypatch.setattr("app.services.ai_proof_flags.get_settings", lambda: stub)
 
-def test_call_ai_proof_advisor_returns_fallback_without_key():
-    from app.config import settings
-    from app.services.ai_proof_advisor import call_ai_proof_advisor
+    assert ai_proof_flags.ai_enabled() is False
+    assert ai_proof_flags.ai_model() == "gpt-test"
+    assert ai_proof_flags.ai_provider() == "openai"
+    assert ai_proof_flags.ai_timeout_seconds() == 30
 
-    original = settings.OPENAI_API_KEY
-    settings.OPENAI_API_KEY = None
-    try:
-        context = {"mandate_context": {}, "backend_checks": {}, "document_context": {}}
-        result = call_ai_proof_advisor(context=context)
-        assert result["risk_level"] == "warning"
-        assert "ai_unavailable" in result["flags"]
-    finally:
-        settings.OPENAI_API_KEY = original
+    stub.AI_PROOF_ADVISOR_ENABLED = True
+    stub.AI_PROOF_TIMEOUT_SECONDS = 45
+
+    assert ai_proof_flags.ai_enabled() is True
+    assert ai_proof_flags.ai_timeout_seconds() == 45

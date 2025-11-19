@@ -5,4 +5,8 @@ import pytest
 async def test_healthcheck(client):
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["psp_webhook_secret_status"] in {"missing", "partial", "ok"}
+    assert isinstance(payload["scheduler_config_enabled"], bool)
+    assert isinstance(payload["scheduler_running"], bool)

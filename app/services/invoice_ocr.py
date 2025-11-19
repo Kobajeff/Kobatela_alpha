@@ -4,15 +4,19 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict
 
-from app.config import settings
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _current_settings():
+    return get_settings()
 
 
 def invoice_ocr_enabled() -> bool:
     """Return True if the invoice OCR feature is enabled."""
 
-    return bool(getattr(settings, "INVOICE_OCR_ENABLED", False))
+    return bool(getattr(_current_settings(), "INVOICE_OCR_ENABLED", False))
 
 
 def _call_external_ocr_provider(storage_url: str) -> Dict[str, Any]:
@@ -21,7 +25,7 @@ def _call_external_ocr_provider(storage_url: str) -> Dict[str, Any]:
     This is a stub for now; future phases will plug a real provider (Mindee, Tabscanner...).
     """
 
-    provider = getattr(settings, "INVOICE_OCR_PROVIDER", "none")
+    provider = getattr(_current_settings(), "INVOICE_OCR_PROVIDER", "none")
 
     if provider == "none":
         return {}
@@ -94,20 +98,29 @@ def enrich_metadata_with_invoice_ocr(
     """Enrich metadata with OCR info without overwriting user-supplied values."""
 
     metadata = dict(existing_metadata or {})
+    provider = getattr(_current_settings(), "INVOICE_OCR_PROVIDER", "none")
 
     if not invoice_ocr_enabled():
+        metadata.setdefault("ocr_status", "disabled")
+        metadata.setdefault("ocr_provider", provider)
         return metadata
 
     try:
         raw = _call_external_ocr_provider(storage_url)
         normalized = _normalize_invoice_ocr(raw)
 
+        status = "ok" if normalized else "empty"
+
         for key, value in normalized.items():
             if key not in metadata or metadata.get(key) in (None, ""):
                 metadata[key] = value
 
+        metadata["ocr_status"] = status
+        metadata["ocr_provider"] = provider
         return metadata
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("Invoice OCR failed for %s: %s", storage_url, exc)
+        metadata.setdefault("ocr_status", "error")
+        metadata.setdefault("ocr_provider", provider)
         return metadata
