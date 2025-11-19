@@ -68,6 +68,26 @@ def submit_proof(
     metadata_payload.pop("ai_assessment", None)
     ai_result: dict[str, Any] | None = None
 
+    invoice_total_amount: Decimal | None = None
+    invoice_currency: str | None = None
+
+    if isinstance(metadata_payload, dict):
+        raw_amount = metadata_payload.get("invoice_total_amount") or metadata_payload.get(
+            "ocr_invoice_total_amount"
+        )
+        raw_currency = metadata_payload.get("invoice_currency") or metadata_payload.get(
+            "ocr_invoice_currency"
+        )
+
+        if raw_amount is not None:
+            try:
+                invoice_total_amount = Decimal(str(raw_amount))
+            except Exception:  # noqa: BLE001
+                invoice_total_amount = None
+
+        if isinstance(raw_currency, str) and len(raw_currency.strip()) == 3:
+            invoice_currency = raw_currency.strip().upper()
+
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
         metadata_payload = enrich_metadata_with_invoice_ocr(
             storage_url=payload.storage_url,
@@ -281,6 +301,8 @@ def submit_proof(
         metadata_=metadata_payload or None,  # colonne = metadata_
         status=proof_status,
         created_at=utcnow(),
+        invoice_total_amount=invoice_total_amount,
+        invoice_currency=invoice_currency,
     )
     if ai_result:
         proof.ai_risk_level = ai_result.get("risk_level")

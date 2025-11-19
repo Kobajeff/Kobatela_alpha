@@ -75,3 +75,22 @@ def release_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None 
     finally:
         if should_close:
             session.close()
+
+
+# ---------------------------------------------------------------------------
+# R4 – Scheduler lock hardening plan
+# ---------------------------------------------------------------------------
+# 1. Alembic migration: add nullable ``owner_id`` (String) and ``expires_at``
+#    (DateTime with timezone) columns to ``scheduler_locks``.
+# 2. Extend ``SchedulerLock`` model to include these fields plus convenience
+#    helpers to compute expiry windows.
+# 3. Update ``try_acquire_scheduler_lock`` to:
+#      - compute ``owner_id`` as "<hostname>:<pid>" and ``expires_at`` as
+#        ``acquired_at + LOCK_TTL``,
+#      - consider locks stale when ``expires_at`` is in the past or missing,
+#        deleting stale rows before acquiring the lock.
+# 4. Update ``release_scheduler_lock`` to optionally filter by ``owner_id`` so
+#    that only the holder (or legacy callers with owner-less locks) can release.
+# 5. Enhance ``/health`` (and other diagnostics) to expose the current
+#    ``scheduler_lock_owner`` and ``scheduler_lock_expires_in`` to help SREs
+#    understand which instance owns the lock and when it will time out.
