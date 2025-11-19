@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 ALERT_UNAUTHORIZED = "UNAUTHORIZED_TRANSFER_ATTEMPT"
 
 
+def get_transaction(db: Session, transaction_id: int) -> Transaction | None:
+    """Return a transaction by id."""
+
+    return db.get(Transaction, transaction_id)
+
+
 def _audit(
     db: Session,
     *,
