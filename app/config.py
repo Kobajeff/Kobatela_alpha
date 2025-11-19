@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from functools import lru_cache
+import time
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -88,14 +88,30 @@ class AppInfo(BaseModel):
     version: str = "0.1.0"
 
 
-settings = Settings()
+_SETTINGS_CACHE: Settings | None = None
+_SETTINGS_LOADED_AT: float | None = None
+_SETTINGS_TTL_SECONDS = 60.0
 
 
-@lru_cache
 def get_settings() -> Settings:
-    """Return cached application settings."""
+    """Return cached application settings with a TTL refresh."""
 
-    return settings
+    global _SETTINGS_CACHE, _SETTINGS_LOADED_AT
+    now = time.time()
+
+    if _SETTINGS_CACHE is None or _SETTINGS_LOADED_AT is None:
+        _SETTINGS_CACHE = Settings()
+        _SETTINGS_LOADED_AT = now
+        return _SETTINGS_CACHE
+
+    if now - _SETTINGS_LOADED_AT > _SETTINGS_TTL_SECONDS:
+        _SETTINGS_CACHE = Settings()
+        _SETTINGS_LOADED_AT = now
+
+    return _SETTINGS_CACHE
+
+
+settings = get_settings()
 
 
 __all__ = [

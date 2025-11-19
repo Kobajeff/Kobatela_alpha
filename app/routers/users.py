@@ -59,11 +59,22 @@ def create_user(
 def get_user(
     user_id: int,
     db: Session = Depends(get_db),
-    _api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.support})),
 ) -> User:
     """Retrieve a user by identifier."""
 
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=error_response("USER_NOT_FOUND", "User not found."))
+
+    actor = actor_from_api_key(api_key, fallback="apikey:unknown")
+    log_audit(
+        db,
+        actor=actor,
+        action="READ_USER",
+        entity="User",
+        entity_id=user.id,
+        data={"reason": "api_read"},
+    )
+
     return user
