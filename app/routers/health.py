@@ -1,9 +1,14 @@
 """Health check endpoint."""
+from __future__ import annotations
+
+import hashlib
+
 from fastapi import APIRouter
 
-from app.config import get_settings
+from app.config import SCHEDULER_ENABLED, Settings, get_settings
 from app.core.runtime_state import is_scheduler_active
 from app.services.ai_proof_flags import ai_enabled
+from app.services.scheduler_lock import describe_scheduler_lock
 
 router = APIRouter(prefix="/health", tags=["health"])
 
@@ -34,6 +39,19 @@ def _secret_status(primary: str | None, secondary: str | None) -> str:
     return "missing"
 
 
+def _psp_secret_fingerprints(settings: Settings) -> dict[str, str | None]:
+    def _fp(value: str | None) -> str | None:
+        if not value:
+            return None
+        h = hashlib.sha256(value.encode("utf-8")).hexdigest()
+        return h[:8]
+
+    return {
+        "primary": _fp(settings.psp_webhook_secret),
+        "next": _fp(settings.psp_webhook_secret_next),
+    }
+
+
 @router.get("", summary="Health check")
 def healthcheck() -> dict[str, object]:
     """Return a simple health payload with AI/OCR telemetry."""
@@ -45,8 +63,10 @@ def healthcheck() -> dict[str, object]:
         "status": "ok",
         "psp_webhook_configured": bool(primary_secret or secondary_secret),
         "psp_webhook_secret_status": _secret_status(primary_secret, secondary_secret),
+        "psp_webhook_secret_fingerprints": _psp_secret_fingerprints(settings),
         "ocr_enabled": bool(settings.INVOICE_OCR_ENABLED),
         "ai_proof_enabled": ai_enabled(),
-        "scheduler_config_enabled": bool(getattr(settings, "SCHEDULER_ENABLED", False)),
+        "scheduler_config_enabled": bool(getattr(settings, "SCHEDULER_ENABLED", SCHEDULER_ENABLED)),
         "scheduler_running": is_scheduler_active(),
+        "scheduler_lock": describe_scheduler_lock(),
     }
