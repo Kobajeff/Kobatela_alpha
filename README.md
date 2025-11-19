@@ -26,6 +26,7 @@ Environment variables:
 - `APP_ENV`: Application environment label.
 - `DATABASE_URL`: SQLAlchemy database URL (defaults to SQLite `kobatella.db`).
 - `API_KEY`: Shared bearer token required for all endpoints.
+- `KOB_SCHEDULER_ENABLED`: Enable the in-process APScheduler runner. **Set this flag to `1` on only one instance**; multi-instance deployments require an external lock/worker to avoid executing cron jobs twice.
 
 ## Running the API
 
