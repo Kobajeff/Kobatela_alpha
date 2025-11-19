@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict
 
 from app.config import get_settings
@@ -41,53 +42,61 @@ def _normalize_invoice_ocr(raw: Dict[str, Any]) -> Dict[str, Any]:
     if not raw:
         return {}
 
-    total = raw.get("total_amount") or raw.get("amount") or None
-    currency = raw.get("currency") or None
-    date_value = raw.get("invoice_date") or raw.get("date") or None
-    invoice_number = raw.get("invoice_number") or None
-    supplier_name = raw.get("supplier_name") or raw.get("merchant_name") or None
-    supplier_country = raw.get("supplier_country") or raw.get("country") or None
-    supplier_city = raw.get("supplier_city") or raw.get("city") or None
-    iban = raw.get("iban") or raw.get("bank_account") or None
-
-    iban_last4 = iban[-4:] if isinstance(iban, str) and len(iban) >= 4 else None
-    iban_full_masked = None
-    if isinstance(iban, str) and len(iban) >= 8:
-        masked_body = ''.join('*' if ch != ' ' else ' ' for ch in iban[:-4])
-        iban_full_masked = f"{masked_body}{iban[-4:]}"
-
     normalized: Dict[str, Any] = {}
 
-    if total is not None:
-        try:
-            normalized["invoice_total_amount"] = float(total)
-        except (TypeError, ValueError):
-            pass
+    total_raw = raw.get("total_amount") or raw.get("amount")
+    normalized["invoice_total_raw"] = total_raw
 
+    total_dec: Decimal | None = None
+    if total_raw is not None:
+        try:
+            total_dec = Decimal(str(total_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except (InvalidOperation, TypeError, ValueError):
+            total_dec = None
+
+    if total_dec is not None:
+        normalized["invoice_total_amount"] = total_dec
+
+    currency = raw.get("currency") or raw.get("invoice_currency")
     if currency:
         normalized["invoice_currency"] = str(currency).upper()
 
+    date_value = raw.get("invoice_date") or raw.get("date")
     if date_value:
         normalized["invoice_date"] = str(date_value)
 
+    invoice_number = raw.get("invoice_number")
     if invoice_number:
         normalized["invoice_number"] = str(invoice_number)
 
+    supplier_name = raw.get("supplier_name") or raw.get("merchant_name")
     if supplier_name:
-        normalized["supplier_name"] = str(supplier_name)
+        normalized["invoice_supplier_name"] = str(supplier_name)
+        normalized.setdefault("supplier_name", str(supplier_name))
 
+    supplier_country = raw.get("supplier_country") or raw.get("country")
     if supplier_country:
-        normalized["supplier_country"] = str(supplier_country)
+        normalized["invoice_supplier_country"] = str(supplier_country)
+        normalized.setdefault("supplier_country", str(supplier_country))
 
+    supplier_city = raw.get("supplier_city") or raw.get("city")
     if supplier_city:
-        normalized["supplier_city"] = str(supplier_city)
+        normalized["invoice_supplier_city"] = str(supplier_city)
+        normalized.setdefault("supplier_city", str(supplier_city))
 
-    if iban_last4:
-        normalized["iban_last4"] = iban_last4
-    if iban_full_masked:
-        normalized["iban_full_masked"] = iban_full_masked
+    iban = raw.get("iban") or raw.get("bank_account")
+    if isinstance(iban, str):
+        iban_clean = iban.replace(" ", "")
+        if iban_clean:
+            last4 = iban_clean[-4:]
+            normalized["invoice_iban_last4"] = last4
+            normalized.setdefault("iban_last4", last4)
+            if len(iban_clean) >= 4:
+                masked = f"****{last4}"
+                normalized["invoice_iban_masked"] = masked
+                normalized.setdefault("iban_full_masked", masked)
 
-    return normalized
+    return {k: v for k, v in normalized.items() if v is not None}
 
 
 def enrich_metadata_with_invoice_ocr(
@@ -101,26 +110,25 @@ def enrich_metadata_with_invoice_ocr(
     provider = getattr(_current_settings(), "INVOICE_OCR_PROVIDER", "none")
 
     if not invoice_ocr_enabled():
-        metadata.setdefault("ocr_status", "disabled")
-        metadata.setdefault("ocr_provider", provider)
+        logger.info("Invoice OCR disabled; skipping enrichment for %s", storage_url)
+        metadata["ocr_status"] = "disabled"
+        metadata["ocr_provider"] = provider
         return metadata
 
     try:
         raw = _call_external_ocr_provider(storage_url)
         normalized = _normalize_invoice_ocr(raw)
 
-        status = "ok" if normalized else "empty"
-
         for key, value in normalized.items():
-            if key not in metadata or metadata.get(key) in (None, ""):
+            if key not in metadata:
                 metadata[key] = value
 
-        metadata["ocr_status"] = status
+        metadata["ocr_status"] = "success"
         metadata["ocr_provider"] = provider
         return metadata
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("Invoice OCR failed for %s: %s", storage_url, exc)
-        metadata.setdefault("ocr_status", "error")
-        metadata.setdefault("ocr_provider", provider)
+        metadata["ocr_status"] = "error"
+        metadata["ocr_provider"] = provider
         return metadata

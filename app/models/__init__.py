@@ -12,6 +12,7 @@ from .payment import Payment, PaymentStatus
 from .proof import Proof
 from .psp_webhook import PSPWebhookEvent
 from .transaction import Transaction, TransactionStatus
+from .scheduler_lock import SchedulerLock
 from .spend import AllowedUsage, Merchant, Purchase, PurchaseStatus, SpendCategory
 from .usage_mandate import UsageMandate, UsageMandateStatus
 from .user import User
@@ -36,6 +37,7 @@ __all__ = [
     "PaymentStatus",
     "PSPWebhookEvent",
     "Proof",
+    "SchedulerLock",
     "Transaction",
     "TransactionStatus",
     "SpendCategory",

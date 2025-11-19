@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import hashlib
 import hmac
 import logging
 import time
@@ -25,12 +24,14 @@ def _current_settings():
     return get_settings()
 
 
-def _psp_secrets() -> dict[str, str | None]:
+def _current_secrets() -> tuple[str | None, str | None]:
     settings = _current_settings()
-    return {
-        "primary": settings.psp_webhook_secret,
-        "secondary": settings.psp_webhook_secret_next,
-    }
+    return settings.psp_webhook_secret, settings.psp_webhook_secret_next
+
+
+def _secrets_map() -> dict[str, str | None]:
+    primary, secondary = _current_secrets()
+    return {"primary": primary, "secondary": secondary}
 
 
 def _masked_secret_status(secrets_info: dict[str, str | None]) -> dict[str, str | None]:
@@ -63,7 +64,7 @@ def verify_signature(
 ) -> tuple[bool, str]:
     """Validate webhook signatures with HMAC rotation and timestamp skew protection."""
 
-    secrets_info = _psp_secrets()
+    secrets_info = _secrets_map()
     secrets = [s for s in secrets_info.values() if s]
     if not secrets:
         _log_signature_failure("secret-missing", secrets_info=secrets_info)

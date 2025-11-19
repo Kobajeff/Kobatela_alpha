@@ -10,8 +10,8 @@ import logging
 from typing import Any, Dict, List, Optional
 
 
-from app.config import settings
-from app.services.ai_proof_flags import ai_model, ai_timeout_seconds
+from app.config import get_settings
+from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
 from app.utils.masking import mask_proof_metadata
 
 try:
@@ -225,6 +225,15 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------
 # 3️⃣ Fonction principale : appel OpenAI
 # --------------------------------------------------
+def _fallback_response(*, flags: list[str], explanation: str, score: float = 0.5) -> Dict[str, Any]:
+    return {
+        "risk_level": "warning",
+        "score": score,
+        "flags": ["ai_unavailable", *flags],
+        "explanation": explanation,
+    }
+
+
 def call_ai_proof_advisor(
     *,
     model: str = "gpt-5.1-mini",
@@ -233,36 +242,42 @@ def call_ai_proof_advisor(
 ) -> Dict[str, Any]:
     """Call the Kobatela AI Proof Advisor."""
 
+    settings = get_settings()
+
+    if not ai_enabled():
+        logger.warning("AI Proof Advisor requested while feature is disabled; returning fallback result.")
+        return _fallback_response(
+            flags=["ai_disabled"],
+            explanation=(
+                "L'analyse automatique n'est pas activée pour cet environnement. "
+                "Merci d'effectuer une revue manuelle."
+            ),
+        )
+
     api_key = settings.OPENAI_API_KEY
     if not api_key:
         logger.warning("OPENAI_API_KEY is not set; returning fallback AI result.")
-        return {
-            "risk_level": "warning",
-            "score": 0.5,
-            "flags": ["ai_unavailable", "missing_api_key"],
-            "explanation": (
-                "L'analyse automatique n'a pas pu être effectuée "
-                "car la clé API n'est pas configurée côté serveur. "
+        return _fallback_response(
+            flags=["missing_api_key"],
+            explanation=(
+                "L'analyse automatique n'a pas pu être effectuée car la clé API n'est pas configurée. "
                 "Une revue manuelle est recommandée."
             ),
-        }
-
-    client = OpenAI(api_key=api_key)
+        )
 
     sanitized_context = _sanitize_context(context)
     user_content = build_ai_user_content(sanitized_context)
     if OpenAI is None:
         logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
-        return {
-            "risk_level": "warning",
-            "score": 0.5,
-            "flags": ["ai_unavailable", "missing_sdk"],
-            "explanation": (
-                "L'analyse automatique n'a pas pu être effectuée "
-                "car le SDK OpenAI n'est pas installé côté serveur. "
-                "Une revue manuelle est recommandée."
+        return _fallback_response(
+            flags=["missing_sdk"],
+            explanation=(
+                "L'analyse automatique n'a pas pu être effectuée car le SDK OpenAI n'est pas disponible. "
+                "Merci de vérifier cette preuve manuellement."
             ),
-        }
+        )
+
+    client = OpenAI(api_key=api_key)
 
 
  
@@ -331,13 +346,12 @@ def call_ai_proof_advisor(
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("AI proof advisor call failed: %s", exc)
-        return {
-            "risk_level": "warning",
-            "score": 0.4,
-            "flags": ["ai_unavailable", "exception_during_call"],
-            "explanation": (
-                "L'analyse automatique de la preuve n'a pas pu être réalisée "
-                "en raison d'une erreur technique. "
+        logger.warning("AI proof advisor fallback response emitted", extra={"reason": "exception_during_call"})
+        return _fallback_response(
+            flags=["exception_during_call"],
+            score=0.4,
+            explanation=(
+                "L'analyse automatique de la preuve n'a pas pu être réalisée en raison d'une erreur technique. "
                 "Merci de vérifier cette preuve manuellement."
             ),
-        }
+        )
