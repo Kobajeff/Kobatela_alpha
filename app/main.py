@@ -26,8 +26,19 @@ ALLOWED_CREATE_ENV = {"dev", "local", "test"}
 async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("Application startup", extra={"env": settings.app_env})
-    if settings.psp_webhook_secret is None:
-        raise RuntimeError("PSP_WEBHOOK_SECRET manquant : configurez la variable d'environnement ou le fichier .env")
+    if not (settings.psp_webhook_secret or settings.psp_webhook_secret_next):
+        logger.error(
+            "PSP webhook secrets are missing; configure PSP_WEBHOOK_SECRET or PSP_WEBHOOK_SECRET_NEXT before startup.",
+            extra={"env": settings.app_env},
+        )
+        raise RuntimeError(
+            "PSP webhook secrets missing: configure PSP_WEBHOOK_SECRET/PSP_WEBHOOK_SECRET_NEXT in the environment."
+        )
+    if settings.psp_webhook_secret is None and settings.psp_webhook_secret_next:
+        logger.warning(
+            "Primary PSP webhook secret unset; relying on PSP_WEBHOOK_SECRET_NEXT only.",
+            extra={"env": settings.app_env},
+        )
     db.init_engine()  # sync, idempotent
     env_lower = settings.app_env.lower()
     if settings.ALLOW_DB_CREATE_ALL and env_lower in ALLOWED_CREATE_ENV:

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.services.ai_proof_flags import ai_model, ai_timeout_seconds
+from app.utils.masking import mask_proof_metadata
 
 try:
     from openai import OpenAI  # type: ignore[import-not-found]
@@ -203,17 +204,6 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-# Champs sensibles à masquer avant envoi au fournisseur IA
-SENSITIVE_KEYS = {
-    "iban",
-    "iban_full",
-    "iban_last4",
-    "account_number",
-    "beneficiary_name",
-    "supplier_name",
-}
-
-
 def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
     """Return a deep-copied context with sensitive fields masked."""
 
@@ -226,13 +216,9 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
     url = doc.get("storage_url")
     if isinstance(url, str):
         doc["storage_url"] = url.rsplit("/", 1)[-1]
-    metadata = doc.get("metadata") or {}
-    for key in list(metadata.keys()):
-        lower = key.lower()
-        if any(token in lower for token in SENSITIVE_KEYS):
-            metadata[key] = "***masked***"
-    doc["metadata"] = metadata
-    ctx["document_context"] = doc
+    ctx["document_context"] = mask_proof_metadata(doc) or {}
+    ctx["mandate_context"] = mask_proof_metadata(ctx.get("mandate_context") or {}) or {}
+    ctx["backend_checks"] = mask_proof_metadata(ctx.get("backend_checks") or {}) or {}
     return ctx
 
 

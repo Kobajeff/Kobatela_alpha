@@ -4,19 +4,20 @@ from decimal import Decimal
 import pytest
 
 from app.models.audit import AuditLog
+from app.models.escrow import EscrowDeposit
 from app.models.user import User
 from app.schemas.escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate
 from app.services import escrow as escrow_service
 from app.utils.time import utcnow
 
 
-@pytest.mark.anyio("asyncio")
-async def test_escrow_happy_path(client, auth_headers):
-    client_user = await client.post("/users", json={"username": "client", "email": "client@example.com"}, headers=auth_headers)
+async def _create_basic_escrow(client, auth_headers) -> int:
+    client_user = await client.post(
+        "/users", json={"username": "client", "email": "client@example.com"}, headers=auth_headers
+    )
     provider_user = await client.post(
         "/users", json={"username": "provider", "email": "provider@example.com"}, headers=auth_headers
     )
-
     deadline = (datetime.now(tz=timezone.utc) + timedelta(days=2)).isoformat()
     escrow_response = await client.post(
         "/escrows",
@@ -31,7 +32,12 @@ async def test_escrow_happy_path(client, auth_headers):
         headers=auth_headers,
     )
     assert escrow_response.status_code == 201
-    escrow_id = escrow_response.json()["id"]
+    return escrow_response.json()["id"]
+
+
+@pytest.mark.anyio("asyncio")
+async def test_escrow_happy_path(client, auth_headers):
+    escrow_id = await _create_basic_escrow(client, auth_headers)
 
     deposit_headers = {**auth_headers, "Idempotency-Key": "deposit-key"}
     deposit = await client.post(
@@ -118,3 +124,64 @@ def test_escrow_state_changes_emit_audit_logs(db_session):
         "ESCROW_PROOF_UPLOADED",
         "ESCROW_RELEASED",
     ]
+
+
+@pytest.mark.anyio("asyncio")
+async def test_deposit_requires_idempotency_key(client, auth_headers):
+    escrow_id = await _create_basic_escrow(client, auth_headers)
+
+    response = await client.post(f"/escrows/{escrow_id}/deposit", json={"amount": 100.0}, headers=auth_headers)
+    assert response.status_code == 422
+
+
+@pytest.mark.anyio("asyncio")
+async def test_deposit_rejects_blank_idempotency_key(client, auth_headers):
+    escrow_id = await _create_basic_escrow(client, auth_headers)
+
+    response = await client.post(
+        f"/escrows/{escrow_id}/deposit",
+        json={"amount": 100.0},
+        headers={**auth_headers, "Idempotency-Key": "   "},
+    )
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_deposit_idempotent_key_creates_single_row(client, auth_headers, db_session):
+    escrow_id = await _create_basic_escrow(client, auth_headers)
+    headers = {**auth_headers, "Idempotency-Key": "escrow-deposit-test"}
+
+    first = await client.post(f"/escrows/{escrow_id}/deposit", json={"amount": 50}, headers=headers)
+    assert first.status_code == 200
+
+    retry = await client.post(f"/escrows/{escrow_id}/deposit", json={"amount": 50}, headers=headers)
+    assert retry.status_code == 200
+
+    deposits = db_session.query(EscrowDeposit).filter(EscrowDeposit.escrow_id == escrow_id).all()
+    assert len(deposits) == 1
+    assert deposits[0].idempotency_key == "escrow-deposit-test"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_get_escrow_requires_auth(client, auth_headers):
+    escrow_id = await _create_basic_escrow(client, auth_headers)
+
+    response = await client.get(f"/escrows/{escrow_id}")
+    assert response.status_code == 401
+
+
+@pytest.mark.anyio("asyncio")
+async def test_get_escrow_audits_reads(client, auth_headers, db_session):
+    escrow_id = await _create_basic_escrow(client, auth_headers)
+
+    response = await client.get(f"/escrows/{escrow_id}", headers=auth_headers)
+    assert response.status_code == 200
+
+    audits = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.action == "ESCROW_READ", AuditLog.entity_id == escrow_id)
+        .all()
+    )
+    assert len(audits) == 1
