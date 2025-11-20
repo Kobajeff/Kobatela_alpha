@@ -116,9 +116,6 @@ def get_settings() -> Settings:
     return _SETTINGS_CACHE
 
 
-settings = get_settings()
-
-
 __all__ = [
     "ENV",
     "DEV_API_KEY",
@@ -128,6 +125,5 @@ __all__ = [
     "SCHEDULER_CRON",
     "Settings",
     "AppInfo",
-    "settings",
     "get_settings",
 ]
