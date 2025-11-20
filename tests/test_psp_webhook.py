@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import get_settings
+from app.main import _assert_psp_webhook_secrets
 from app.models import (
     EscrowAgreement,
     EscrowStatus,
@@ -99,6 +100,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
         },
     )
     assert repeat.status_code == 409
+    assert repeat.json()["error"]["code"] == "WEBHOOK_REPLAY"
     assert db_session.query(PSPWebhookEvent).count() == 1
 
 
@@ -158,6 +160,7 @@ async def test_psp_webhook_invalid_signature(client):
         },
     )
     assert response.status_code == 401
+    assert response.json()["error"]["code"] == "WEBHOOK_SIGNATURE_INVALID"
 
 
 @pytest.mark.anyio
@@ -181,7 +184,7 @@ async def test_psp_webhook_timestamp_out_of_range(client):
     )
 
     assert response.status_code == 401
-    assert response.json()["error"]["code"] == "WEBHOOK_SIGNATURE_INVALID"
+    assert response.json()["error"]["code"] == "WEBHOOK_TIMESTAMP_OUT_OF_RANGE"
 
 
 @pytest.mark.anyio
@@ -244,3 +247,12 @@ def test_psp_secrets_refresh_each_call(monkeypatch):
 
     monkeypatch.setattr(psp_webhooks, "get_settings", lambda: second)
     assert psp_webhooks._current_secrets() == ("beta", "next-beta")
+
+
+def test_startup_requires_psp_secrets_non_dev():
+    prod_like = SimpleNamespace(app_env="prod", psp_webhook_secret=None, psp_webhook_secret_next=None)
+    with pytest.raises(RuntimeError):
+        _assert_psp_webhook_secrets(prod_like)
+
+    dev_like = SimpleNamespace(app_env="dev", psp_webhook_secret=None, psp_webhook_secret_next=None)
+    _assert_psp_webhook_secrets(dev_like)

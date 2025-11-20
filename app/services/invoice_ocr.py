@@ -102,29 +102,19 @@ def _normalize_invoice_ocr(raw: Dict[str, Any]) -> Dict[str, Any]:
 def normalize_invoice_metadata(raw: dict[str, Any]) -> dict[str, Any]:
     """Normalize invoice amount/currency and surface errors explicitly.
 
-    This helper is used by OCR enrichment *and* user-provided metadata to
-    guarantee a single source of truth for typed invoice fields.
+    This helper is preserved for backward-compatibility with callers that
+    expect the historical structure including a ``normalization_errors``
+    array. New code should prefer ``normalize_invoice_amount_and_currency``
+    which returns a tuple for clearer handling of errors.
     """
 
+    amount, currency, errors = normalize_invoice_amount_and_currency(raw)
     out: dict[str, Any] = {}
-    errors: list[str] = []
 
-    raw_amount = raw.get("invoice_total_amount") or raw.get("total") or raw.get("total_amount")
-    if raw_amount is not None:
-        try:
-            out["invoice_total_amount"] = Decimal(str(raw_amount))
-        except (TypeError, InvalidOperation, ValueError):
-            out["invoice_total_amount"] = None
-            errors.append("invalid_invoice_total_amount")
-
-    raw_currency = (raw.get("invoice_currency") or raw.get("currency") or "").strip().upper()
-    if raw_currency:
-        if len(raw_currency) == 3 and raw_currency.isalpha():
-            out["invoice_currency"] = raw_currency
-        else:
-            out["invoice_currency"] = None
-            errors.append("invalid_invoice_currency")
-
+    if amount is not None or "invalid_invoice_total_amount" in errors:
+        out["invoice_total_amount"] = amount
+    if currency is not None or "invalid_invoice_currency" in errors:
+        out["invoice_currency"] = currency
     if errors:
         out["normalization_errors"] = errors
 
@@ -133,16 +123,34 @@ def normalize_invoice_metadata(raw: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_invoice_amount_and_currency(
     metadata: Dict[str, Any],
-) -> Tuple[Optional[Decimal], Optional[str]]:
-    """Extract and normalize invoice total amount & currency from metadata.
+) -> Tuple[Optional[Decimal], Optional[str], list[str]]:
+    """Normalize invoice amount and currency without raising.
 
-    - Accepts strings or numbers for amount.
-    - Normalizes to Decimal with 2 decimal places.
-    - Currency must be a 3-letter uppercase code, otherwise None.
+    Returns ``(amount, currency, errors)`` where errors is a list of
+    normalization error codes. Amounts are parsed as ``Decimal`` with two
+    decimals and currencies must be 3-letter alphabetic codes.
     """
 
-    normalized = normalize_invoice_metadata(metadata)
-    return normalized.get("invoice_total_amount"), normalized.get("invoice_currency")
+    errors: list[str] = []
+
+    raw_amount = metadata.get("invoice_total_amount") or metadata.get("total") or metadata.get("total_amount")
+    amount: Decimal | None = None
+    if raw_amount is not None:
+        try:
+            amount = Decimal(str(raw_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except (InvalidOperation, TypeError, ValueError):
+            amount = None
+            errors.append("invalid_invoice_total_amount")
+
+    raw_currency = str(metadata.get("invoice_currency") or metadata.get("currency") or "").strip()
+    currency: str | None = None
+    if raw_currency:
+        if len(raw_currency) == 3 and raw_currency.isalpha():
+            currency = raw_currency.upper()
+        else:
+            errors.append("invalid_invoice_currency")
+
+    return amount, currency, errors
 
 
 def enrich_metadata_with_invoice_ocr(
@@ -165,7 +173,21 @@ def enrich_metadata_with_invoice_ocr(
         raw = _call_external_ocr_provider(storage_url)
         normalized = _normalize_invoice_ocr(raw)
 
+        if "invoice_total_amount" in normalized:
+            if "invoice_total_amount" not in metadata:
+                metadata["invoice_total_amount"] = normalized["invoice_total_amount"]
+            else:
+                metadata.setdefault("ocr", {})["invoice_total_amount"] = normalized["invoice_total_amount"]
+
+        if "invoice_currency" in normalized:
+            if "invoice_currency" not in metadata:
+                metadata["invoice_currency"] = normalized["invoice_currency"]
+            else:
+                metadata.setdefault("ocr", {})["invoice_currency"] = normalized["invoice_currency"]
+
         for key, value in normalized.items():
+            if key in {"invoice_total_amount", "invoice_currency"}:
+                continue
             if key not in metadata:
                 metadata[key] = value
 
