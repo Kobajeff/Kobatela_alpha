@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from app.config import get_settings
 from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
-from app.utils.masking import mask_metadata_for_ai
+from app.utils.masking import mask_metadata_for_ai, mask_proof_metadata
 
 try:
     from openai import (  # type: ignore[import-not-found]
@@ -34,27 +34,42 @@ logger = logging.getLogger(__name__)
 _AI_FAILURES = 0
 _AI_FAILURE_THRESHOLD = 5
 _AI_CIRCUIT_OPEN = False
+_AI_CIRCUIT_OPEN_UNTIL: float | None = None
+_AI_CIRCUIT_COOLDOWN_SECONDS = 60
 _AI_CALLS_TOTAL = 0
 _AI_ERRORS_TOTAL = 0
 
 
 def _should_skip_ai() -> bool:
-    return _AI_CIRCUIT_OPEN
+    global _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPEN_UNTIL, _AI_FAILURES
+
+    if not _AI_CIRCUIT_OPEN:
+        return False
+
+    if _AI_CIRCUIT_OPEN_UNTIL and time.monotonic() >= _AI_CIRCUIT_OPEN_UNTIL:
+        _AI_CIRCUIT_OPEN = False
+        _AI_FAILURES = 0
+        _AI_CIRCUIT_OPEN_UNTIL = None
+        return False
+
+    return True
 
 
 def _record_ai_failure():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPEN_UNTIL
     _record_ai_error()
     _AI_FAILURES += 1
     if _AI_FAILURES >= _AI_FAILURE_THRESHOLD:
         _AI_CIRCUIT_OPEN = True
+        _AI_CIRCUIT_OPEN_UNTIL = time.monotonic() + _AI_CIRCUIT_COOLDOWN_SECONDS
 
 
 def _record_ai_success():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CALLS_TOTAL
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPEN_UNTIL, _AI_CALLS_TOTAL
     _AI_CALLS_TOTAL += 1
     _AI_FAILURES = 0
     _AI_CIRCUIT_OPEN = False
+    _AI_CIRCUIT_OPEN_UNTIL = None
 
 
 def _record_ai_error():
@@ -260,6 +275,16 @@ def _sanitize_context(context: Mapping[str, Any]) -> Dict[str, Any]:
     data = deepcopy(context)
     data.pop("_ai_redacted_keys", None)
 
+    mandate_ctx = data.get("mandate_context")
+    data["mandate_context"] = (
+        mask_proof_metadata(mandate_ctx) if isinstance(mandate_ctx, Mapping) else {}
+    )
+
+    backend_checks = data.get("backend_checks")
+    data["backend_checks"] = (
+        mask_proof_metadata(backend_checks) if isinstance(backend_checks, Mapping) else {}
+    )
+
     doc_ctx = data.get("document_context") or {}
     doc_ctx.pop("_ai_redacted_keys", None)
 
@@ -269,6 +294,8 @@ def _sanitize_context(context: Mapping[str, Any]) -> Dict[str, Any]:
 
     metadata = doc_ctx.get("metadata")
     if isinstance(metadata, Mapping):
+        metadata = dict(metadata)
+        metadata.pop("_ai_redacted_keys", None)
         doc_ctx["metadata"] = mask_metadata_for_ai(metadata)
     else:
         doc_ctx["metadata"] = {}
