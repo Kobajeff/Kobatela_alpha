@@ -35,6 +35,32 @@ def clear_recent_replays():
     psp_webhooks._recent_psp_events.clear()
 
 
+def test_replay_guard_cleanup_uses_current_time(monkeypatch):
+    from app.services import psp_webhooks
+
+    fixed_now = int(time.time())
+    monkeypatch.setattr(psp_webhooks.time, "time", lambda: fixed_now)
+    psp_webhooks._recent_psp_events.update(
+        old=fixed_now - psp_webhooks._RECENT_PSP_EVENTS_TTL_SECONDS - 5,
+        fresh=fixed_now,
+    )
+
+    psp_webhooks._cleanup_recent_psp_events()
+
+    assert "old" not in psp_webhooks._recent_psp_events
+    assert "fresh" in psp_webhooks._recent_psp_events
+
+
+def test_replay_guard_does_not_cache_before_success(monkeypatch):
+    from app.services import psp_webhooks
+
+    fixed_now = int(time.time())
+    monkeypatch.setattr(psp_webhooks.time, "time", lambda: fixed_now)
+
+    assert not psp_webhooks._is_recent_replay("evt-pre", fixed_now - 1000)
+    assert "evt-pre" not in psp_webhooks._recent_psp_events
+
+
 def _create_user(db_session, username: str) -> User:
     user = User(username=username, email=f"{username}@example.com")
     db_session.add(user)
