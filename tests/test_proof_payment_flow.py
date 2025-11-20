@@ -7,7 +7,7 @@ import pytest
 from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from app.config import settings
+from app.config import get_settings
 from app.models import (
     EscrowAgreement,
     EscrowStatus,
@@ -155,6 +155,7 @@ async def test_proof_approval_triggers_payment(client, auth_headers, db_session)
 
 
 def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
+    settings = get_settings()
     original_flag = settings.AI_PROOF_ADVISOR_ENABLED
     settings.AI_PROOF_ADVISOR_ENABLED = True
     stub_result = {
