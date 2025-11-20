@@ -1,4 +1,5 @@
 import pytest
+import time
 
 
 def test_ai_proof_advisor_logs_status(monkeypatch):
@@ -80,3 +81,27 @@ def test_ai_circuit_breaker_opens_after_failures(monkeypatch):
 
     ai_proof_advisor._AI_FAILURES = 0
     ai_proof_advisor._AI_CIRCUIT_OPEN = False
+
+
+def test_ai_circuit_breaker_allows_retry_after_cooldown(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    ai_proof_advisor._AI_FAILURES = ai_proof_advisor._AI_FAILURE_THRESHOLD
+    ai_proof_advisor._AI_CIRCUIT_OPEN = True
+    ai_proof_advisor._AI_CIRCUIT_OPENED_AT = (
+        time.monotonic() - ai_proof_advisor._AI_CIRCUIT_COOLDOWN_SECONDS - 1
+    )
+
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: False)
+
+    result = ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}}, proof_storage_url=None
+    )
+
+    assert "circuit_breaker_open" not in result.get("flags", [])
+    assert ai_proof_advisor._AI_FAILURES == 0
+    assert ai_proof_advisor._AI_CIRCUIT_OPEN is False
+
+    ai_proof_advisor._AI_FAILURES = 0
+    ai_proof_advisor._AI_CIRCUIT_OPEN = False
+    ai_proof_advisor._AI_CIRCUIT_OPENED_AT = None
