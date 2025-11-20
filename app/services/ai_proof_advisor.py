@@ -258,14 +258,8 @@ def _sanitize_context(context: Mapping[str, Any]) -> Dict[str, Any]:
     """Return a sanitized copy of the AI context, safe to send to the provider."""
 
     data = deepcopy(context)
-    data.pop("_ai_redacted_keys", None)
 
     doc_ctx = data.get("document_context") or {}
-    doc_ctx.pop("_ai_redacted_keys", None)
-
-    url = doc_ctx.get("storage_url")
-    if isinstance(url, str):
-        doc_ctx["storage_url"] = url.rsplit("/", 1)[-1]
 
     metadata = doc_ctx.get("metadata")
     if isinstance(metadata, Mapping):
