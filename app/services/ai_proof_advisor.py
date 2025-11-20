@@ -8,8 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from copy import deepcopy
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Optional
 
 
 from app.config import get_settings
@@ -254,21 +253,38 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _sanitize_context(context: Mapping[str, Any]) -> Dict[str, Any]:
-    """Return a sanitized copy of the AI context, safe to send to the provider."""
+def _sanitize_context(context: dict) -> dict:
+    """
+    Ensure FULL privacy:
+    - mask mandate_context
+    - mask backend_checks
+    - mask document_context.metadata
+    """
+    if not isinstance(context, dict):
+        return {}
 
-    data = deepcopy(context)
+    # Mandate context
+    mandate = context.get("mandate_context", {}) or {}
+    cleaned_mandate = mask_metadata_for_ai(mandate)
 
-    doc_ctx = data.get("document_context") or {}
+    # Backend checks
+    backend = context.get("backend_checks", {}) or {}
+    cleaned_backend = mask_metadata_for_ai(backend)
 
-    metadata = doc_ctx.get("metadata")
-    if isinstance(metadata, Mapping):
-        doc_ctx["metadata"] = mask_metadata_for_ai(metadata)
-    else:
-        doc_ctx["metadata"] = {}
+    # Document context
+    doc_ctx = context.get("document_context", {}) or {}
+    doc_meta = doc_ctx.get("metadata", {}) or {}
 
-    data["document_context"] = doc_ctx
-    return data
+    cleaned_doc_ctx = {
+        **doc_ctx,
+        "metadata": mask_metadata_for_ai(doc_meta)
+    }
+
+    return {
+        "mandate_context": cleaned_mandate,
+        "backend_checks": cleaned_backend,
+        "document_context": cleaned_doc_ctx,
+    }
 
 
 # --------------------------------------------------
@@ -338,6 +354,7 @@ def call_ai_proof_advisor(
                 ),
             )
 
+        # Apply strict privacy sanitization
         sanitized_context = _sanitize_context(context)
         user_content = build_ai_user_content(sanitized_context)
         if OpenAI is None:
