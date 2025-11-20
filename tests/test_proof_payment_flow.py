@@ -223,16 +223,15 @@ def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
 def test_submit_proof_uses_ocr_invoice_fields(monkeypatch, db_session):
     escrow, milestone = _create_pdf_milestone(db_session)
 
-    def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
-        enriched = dict(existing_metadata or {})
-        enriched.setdefault("invoice_total_amount", Decimal("321.00"))
-        enriched.setdefault("invoice_currency", "eur")
-        return enriched
-
     monkeypatch.setattr(
         proofs_service,
-        "enrich_metadata_with_invoice_ocr",
-        fake_enrich,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {
+            "ocr_status": "success",
+            "ocr_provider": "dummy",
+            "total_amount": Decimal("321.00"),
+            "currency": "eur",
+        },
     )
 
     payload = ProofCreate(
@@ -251,21 +250,22 @@ def test_submit_proof_uses_ocr_invoice_fields(monkeypatch, db_session):
     assert proof.invoice_currency == "EUR"
     assert proof.metadata_["invoice_total_amount"] == "321.00"
     assert proof.metadata_["invoice_currency"] == "eur"
+    assert proof.metadata_["ocr_raw"]["total_amount"] == "321.00"
+    assert proof.metadata_["ocr_raw"]["currency"] == "eur"
 
 
 def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
     escrow, milestone = _create_pdf_milestone(db_session)
 
-    def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
-        enriched = dict(existing_metadata or {})
-        enriched.setdefault("ocr", {})["invoice_total_amount"] = Decimal("999.99")
-        enriched.setdefault("ocr", {})["invoice_currency"] = "eur"
-        return enriched
-
     monkeypatch.setattr(
         proofs_service,
-        "enrich_metadata_with_invoice_ocr",
-        fake_enrich,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {
+            "ocr_status": "success",
+            "ocr_provider": "dummy",
+            "total_amount": Decimal("999.99"),
+            "currency": "eur",
+        },
     )
 
     payload = ProofCreate(
@@ -284,22 +284,17 @@ def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
     assert proof.invoice_currency == "GBP"
     assert proof.metadata_["invoice_total_amount"] == "150.50"
     assert proof.metadata_["invoice_currency"] == "gbp"
-    assert proof.metadata_["ocr"]["invoice_total_amount"] == "999.99"
-    assert proof.metadata_["ocr"]["invoice_currency"] == "eur"
+    assert proof.metadata_["ocr_raw"]["total_amount"] == "999.99"
+    assert proof.metadata_["ocr_raw"]["currency"] == "eur"
 
 
 def test_submit_proof_invalid_currency_returns_422(monkeypatch, db_session):
     escrow, milestone = _create_pdf_milestone(db_session)
 
-    def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
-        enriched = dict(existing_metadata or {})
-        enriched.setdefault("invoice_currency", "usd4")
-        return enriched
-
     monkeypatch.setattr(
         proofs_service,
-        "enrich_metadata_with_invoice_ocr",
-        fake_enrich,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {"ocr_status": "success", "ocr_provider": "dummy", "currency": "usd4"},
     )
 
     payload = ProofCreate(

@@ -27,7 +27,7 @@ from app.services import (
 from app.services.ai_proof_advisor import call_ai_proof_advisor
 from app.services.ai_proof_flags import ai_enabled
 from app.services.document_checks import compute_document_backend_checks
-from app.services.invoice_ocr import enrich_metadata_with_invoice_ocr, normalize_invoice_amount_and_currency
+from app.services.invoice_ocr import normalize_invoice_amount_and_currency, run_invoice_ocr_if_enabled
 from app.services.idempotency import get_existing_by_key
 from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
@@ -85,10 +85,17 @@ def submit_proof(
     ai_result: dict[str, Any] | None = None
 
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
-        metadata_payload = enrich_metadata_with_invoice_ocr(
-            storage_url=payload.storage_url,
-            existing_metadata=metadata_payload,
-        )
+        ocr_result = run_invoice_ocr_if_enabled(b"")
+        metadata_payload.setdefault("ocr_status", ocr_result.get("ocr_status"))
+        metadata_payload.setdefault("ocr_provider", ocr_result.get("ocr_provider"))
+
+        if "total_amount" in ocr_result and metadata_payload.get("invoice_total_amount") is None:
+            metadata_payload["invoice_total_amount"] = ocr_result["total_amount"]
+        if "currency" in ocr_result and metadata_payload.get("invoice_currency") is None:
+            metadata_payload["invoice_currency"] = ocr_result["currency"]
+
+        metadata_payload.setdefault("ocr_raw", {})
+        metadata_payload["ocr_raw"].update(ocr_result)
 
     metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
 

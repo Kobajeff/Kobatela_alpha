@@ -57,8 +57,8 @@ async def test_ai_and_ocr_audit_logs(monkeypatch, db_session):
     )
     monkeypatch.setattr(
         proofs_service,
-        "enrich_metadata_with_invoice_ocr",
-        lambda storage_url, existing_metadata: {"ocr_status": "success", "ocr_provider": "stub", **(existing_metadata or {})},
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {"ocr_status": "success", "ocr_provider": "stub"},
     )
 
     payload = ProofCreate(

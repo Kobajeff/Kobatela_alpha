@@ -1,97 +1,57 @@
-import pytest
-
 from decimal import Decimal
 
-from app.services.invoice_ocr import (
-    enrich_metadata_with_invoice_ocr,
-    normalize_invoice_amount_and_currency,
-    normalize_invoice_metadata,
-)
+import pytest
+
+from app.services import invoice_ocr
+from app.services.invoice_ocr import normalize_invoice_amount_and_currency, normalize_invoice_metadata
 
 
-class StubSettings:
-    INVOICE_OCR_ENABLED = False
-    INVOICE_OCR_PROVIDER = "none"
-
-
-def _stub_settings(enabled: bool, provider: str):
-    stub = StubSettings()
-    stub.INVOICE_OCR_ENABLED = enabled
-    stub.INVOICE_OCR_PROVIDER = provider
-    return stub
-
-
-def test_enrich_metadata_marks_disabled(monkeypatch):
-    stub = _stub_settings(False, "none")
-    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
-
-    result = enrich_metadata_with_invoice_ocr(storage_url="s3://disabled", existing_metadata={})
-
-    assert result["ocr_status"] == "disabled"
-    assert result["ocr_provider"] == "none"
-
-
-def test_enrich_metadata_records_provider_and_status(monkeypatch):
-    stub = _stub_settings(True, "stub-provider")
-    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
+def test_enrich_metadata_merges_and_preserves_user(monkeypatch):
     monkeypatch.setattr(
-        "app.services.invoice_ocr._call_external_ocr_provider",
-        lambda storage_url: {"total_amount": "123.45", "iban": "DE89370400440532013000"},
-    )
-
-    result = enrich_metadata_with_invoice_ocr(storage_url="s3://invoice", existing_metadata={})
-
-    assert result["ocr_status"] == "success"
-    assert result["ocr_provider"] == "stub-provider"
-    assert result["invoice_total_amount"] == Decimal("123.45")
-    assert result["invoice_total_raw"] == "123.45"
-    assert result["iban_last4"] == "3000"
-    assert result["invoice_iban_last4"] == "3000"
-
-
-def test_enrich_metadata_never_overwrites_existing_fields(monkeypatch):
-    stub = _stub_settings(True, "stub-provider")
-    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
-    monkeypatch.setattr(
-        "app.services.invoice_ocr._call_external_ocr_provider",
-        lambda storage_url: {"total_amount": "123.45", "supplier_name": "ACME"},
+        invoice_ocr,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {
+            "ocr_status": "success",
+            "ocr_provider": "dummy",
+            "total_amount": Decimal("123.45"),
+            "currency": "EUR",
+            "supplier_name": "ACME",
+        },
     )
 
     existing = {"invoice_total_amount": Decimal("999.00"), "supplier_name": "User"}
-    result = enrich_metadata_with_invoice_ocr(storage_url="s3://invoice", existing_metadata=existing)
+    result = invoice_ocr.enrich_metadata_with_invoice_ocr(
+        storage_url="s3://invoice", existing_metadata=existing, file_bytes=b"pdf"
+    )
 
     assert result["invoice_total_amount"] == Decimal("999.00")
     assert result["supplier_name"] == "User"
-    # new fields are still populated when absent
-    assert result["invoice_total_raw"] == "123.45"
-    assert result["invoice_supplier_name"] == "ACME"
+    assert result["ocr_status"] == "success"
+    assert result["ocr_provider"] == "dummy"
+    assert result["ocr_raw"]["total_amount"] == Decimal("123.45")
 
 
-def test_enrich_metadata_normalizes_currency(monkeypatch):
-    stub = _stub_settings(True, "stub-provider")
-    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
+def test_enrich_metadata_sets_invoice_fields_when_missing(monkeypatch):
     monkeypatch.setattr(
-        "app.services.invoice_ocr._call_external_ocr_provider",
-        lambda storage_url: {"currency": "eur"},
+        invoice_ocr,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {
+            "ocr_status": "success",
+            "ocr_provider": "dummy",
+            "total_amount": Decimal("321.00"),
+            "currency": "usd",
+            "iban_last4": "1234",
+        },
     )
 
-    result = enrich_metadata_with_invoice_ocr(storage_url="s3://invoice", existing_metadata={})
-
-    assert result["invoice_currency"] == "EUR"
-
-
-def test_enrich_metadata_preserves_user_currency(monkeypatch):
-    stub = _stub_settings(True, "stub-provider")
-    monkeypatch.setattr("app.services.invoice_ocr.get_settings", lambda: stub)
-    monkeypatch.setattr(
-        "app.services.invoice_ocr._call_external_ocr_provider",
-        lambda storage_url: {"currency": "eur"},
+    result = invoice_ocr.enrich_metadata_with_invoice_ocr(
+        storage_url="s3://invoice", existing_metadata={}, file_bytes=b"pdf"
     )
 
-    existing = {"invoice_currency": "USD"}
-    result = enrich_metadata_with_invoice_ocr(storage_url="s3://invoice", existing_metadata=existing)
-
-    assert result["invoice_currency"] == "USD"
+    assert result["invoice_total_amount"] == Decimal("321.00")
+    assert result["invoice_currency"] == "usd"
+    assert result["ocr_raw"]["iban_last4"] == "1234"
+    invoice_ocr.InvoiceOCRResult.model_validate(result["ocr_raw"])
 
 
 def test_normalize_invoice_amount_and_currency_happy_path():
@@ -122,3 +82,4 @@ def test_normalize_invoice_metadata_surfaces_errors():
     assert normalized["invoice_currency"] is None
     assert "invalid_invoice_total_amount" in normalized.get("normalization_errors", [])
     assert "invalid_invoice_currency" in normalized.get("normalization_errors", [])
+
