@@ -13,7 +13,7 @@ from app.config import AppInfo, get_settings
 from app.core.logging import get_logger, setup_logging
 from app.core.runtime_state import set_scheduler_active
 import app.models  # enregistre les tables
-from app.routers import apikeys, get_api_router
+from app.routers import apikeys, get_api_router, kct_public
 from app.services.cron import expire_mandates_once
 from app.services.scheduler_lock import (
     refresh_scheduler_lock,
@@ -156,6 +156,7 @@ app = FastAPI(title=app_info.name, version=app_info.version, lifespan=lifespan)
 _configure_middlewares(app)
 app.include_router(get_api_router())
 app.include_router(apikeys.router)
+app.include_router(kct_public.router)
 
 # Handlers d’erreurs
 @app.exception_handler(Exception)
