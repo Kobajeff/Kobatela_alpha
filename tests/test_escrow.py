@@ -3,10 +3,12 @@ from decimal import Decimal
 
 import pytest
 
+from fastapi import HTTPException, status
+
 from sqlalchemy.exc import IntegrityError
 
 from app.models.audit import AuditLog
-from app.models.escrow import EscrowDeposit
+from app.models.escrow import EscrowDeposit, EscrowDomain
 from app.models.user import User
 from app.schemas.escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate
 from app.services import escrow as escrow_service
@@ -197,6 +199,79 @@ async def test_get_escrow_requires_auth(client, auth_headers):
 
     response = await client.get(f"/escrows/{escrow_id}")
     assert response.status_code == 401
+
+
+def test_create_escrow_defaults_to_private_domain(db_session):
+    client = User(username="client-domain", email="client-domain@example.com")
+    provider = User(username="provider-domain", email="provider-domain@example.com")
+    requester = User(username="requester", email="requester@example.com")
+    db_session.add_all([client, provider, requester])
+    db_session.flush()
+
+    escrow = escrow_service.create_escrow(
+        db_session,
+        EscrowCreate(
+            client_id=client.id,
+            provider_id=provider.id,
+            amount_total=Decimal("50.00"),
+            currency="USD",
+            release_conditions={},
+            deadline_at=utcnow() + timedelta(days=3),
+        ),
+        current_user=requester,
+    )
+
+    assert escrow.domain == EscrowDomain.PRIVATE
+
+
+def test_public_domain_requires_gov_or_ong(db_session):
+    client = User(username="client-public", email="client-public@example.com")
+    provider = User(username="provider-public", email="provider-public@example.com")
+    requester = User(username="private-user", email="private-user@example.com")
+    db_session.add_all([client, provider, requester])
+    db_session.flush()
+
+    with pytest.raises(HTTPException) as excinfo:
+        escrow_service.create_escrow(
+            db_session,
+            EscrowCreate(
+                client_id=client.id,
+                provider_id=provider.id,
+                amount_total=Decimal("75.00"),
+                currency="USD",
+                release_conditions={},
+                deadline_at=utcnow() + timedelta(days=2),
+                domain="public",
+            ),
+            current_user=requester,
+        )
+
+    assert excinfo.value.status_code == status.HTTP_403_FORBIDDEN
+    assert excinfo.value.detail["error"]["code"] == "PUBLIC_DOMAIN_FORBIDDEN"
+
+
+def test_public_domain_allows_gov_or_ong(db_session):
+    client = User(username="client-aid", email="client-aid@example.com")
+    provider = User(username="provider-aid", email="provider-aid@example.com")
+    requester = User(username="gov-user", email="gov-user@example.com", public_tag="GOV")
+    db_session.add_all([client, provider, requester])
+    db_session.flush()
+
+    escrow = escrow_service.create_escrow(
+        db_session,
+        EscrowCreate(
+            client_id=client.id,
+            provider_id=provider.id,
+            amount_total=Decimal("125.00"),
+            currency="USD",
+            release_conditions={},
+            deadline_at=utcnow() + timedelta(days=4),
+            domain="aid",
+        ),
+        current_user=requester,
+    )
+
+    assert escrow.domain == EscrowDomain.AID
 
 
 @pytest.mark.anyio("asyncio")

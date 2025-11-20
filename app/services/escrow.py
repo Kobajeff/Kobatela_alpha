@@ -9,7 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditLog
-from app.models.escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
+from app.models.escrow import EscrowAgreement, EscrowDeposit, EscrowDomain, EscrowEvent, EscrowStatus
+from app.models.user import User
 from app.schemas.escrow import EscrowCreate, EscrowDepositCreate, EscrowActionPayload
 from app.services.idempotency import get_existing_by_key
 from app.utils.audit import sanitize_payload_for_audit
@@ -59,15 +60,27 @@ def _audit(
     )
 
 def create_escrow(
-    db: Session, payload: EscrowCreate, *, actor: str | None = None
+    db: Session, payload: EscrowCreate, *, actor: str | None = None, current_user: User | None = None
 ) -> EscrowAgreement:
     """Create a new escrow agreement."""
+
+    domain_value = payload.domain or EscrowDomain.PRIVATE.value
+    if domain_value in {EscrowDomain.PUBLIC.value, EscrowDomain.AID.value}:
+        if current_user is None or current_user.public_tag not in {"GOV", "ONG"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=error_response(
+                    "PUBLIC_DOMAIN_FORBIDDEN",
+                    "Only GOV/ONG users can create public/aid escrows.",
+                ),
+            )
 
     agreement = EscrowAgreement(
         client_id=payload.client_id,
         provider_id=payload.provider_id,
         amount_total=_to_decimal(payload.amount_total),   # <-- cast ici
         currency=payload.currency,
+        domain=EscrowDomain(domain_value),
         release_conditions_json=payload.release_conditions,
         deadline_at=payload.deadline_at,
         status=EscrowStatus.DRAFT,
