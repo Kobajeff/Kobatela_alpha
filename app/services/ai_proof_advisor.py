@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 
@@ -307,28 +308,29 @@ def _sanitize_context(context: dict) -> dict:
     if not isinstance(context, dict):
         return {}
 
-    # Mandate context → mask sensitive keys only
-    mandate = context.get("mandate_context") or {}
-    cleaned_mandate = _mask_sensitive_only(mandate)
+    cleaned_context = deepcopy(context)
 
-    # Backend checks → mask sensitive keys only
-    backend = context.get("backend_checks") or {}
-    cleaned_backend = _mask_sensitive_only(backend)
+    # Mandate context
+    mandate = cleaned_context.get("mandate_context", {}) or {}
+    mandate = mandate if isinstance(mandate, dict) else {}
+    cleaned_context["mandate_context"] = mask_metadata_for_ai(mandate)
 
-    # Document context → strict metadata masking
-    doc_ctx = context.get("document_context") or {}
-    doc_meta = doc_ctx.get("metadata") or {}
+    # Backend checks
+    backend = cleaned_context.get("backend_checks", {}) or {}
+    backend = backend if isinstance(backend, dict) else {}
+    cleaned_context["backend_checks"] = mask_metadata_for_ai(backend)
 
-    cleaned_doc_ctx = {
+    # Document context
+    doc_ctx = cleaned_context.get("document_context", {}) or {}
+    doc_ctx = doc_ctx if isinstance(doc_ctx, dict) else {}
+    doc_meta = doc_ctx.get("metadata", {}) or {}
+
+    cleaned_context["document_context"] = {
         **doc_ctx,
-        "metadata": mask_metadata_for_ai(doc_meta)
+        "metadata": mask_metadata_for_ai(doc_meta),
     }
 
-    return {
-        "mandate_context": cleaned_mandate,
-        "backend_checks": cleaned_backend,
-        "document_context": cleaned_doc_ctx,
-    }
+    return cleaned_context
 
 
 # --------------------------------------------------
