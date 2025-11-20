@@ -259,19 +259,29 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
 
     data = deepcopy(context)
 
-    doc_ctx = data.get("document_context") or {}
-    url = doc_ctx.get("storage_url")
+    redacted_keys: list[str] = []
+    doc = ctx.get("document_context") or {}
+    url = doc.get("storage_url")
     if isinstance(url, str):
-        doc_ctx["storage_url"] = url.rsplit("/", 1)[-1]
-
-    metadata = doc_ctx.get("metadata")
-    if isinstance(metadata, Mapping):
-        doc_ctx["metadata"] = mask_metadata_for_ai(metadata)
+        doc["storage_url"] = url.rsplit("/", 1)[-1]
+    metadata_for_ai, doc_redacted = mask_metadata_for_ai(doc.get("metadata"))
+    redacted_keys.extend(doc_redacted)
+    masked_doc = mask_proof_metadata(doc) or {}
+    if metadata_for_ai:
+        masked_doc["metadata"] = metadata_for_ai
     else:
-        doc_ctx["metadata"] = {}
+        masked_doc.pop("metadata", None)
+    ctx["document_context"] = masked_doc
 
-    data["document_context"] = doc_ctx
-    return data
+    mandate_masked, mandate_redacted = mask_metadata_for_ai(ctx.get("mandate_context") or {})
+    ctx["mandate_context"] = mandate_masked
+    redacted_keys.extend(mandate_redacted)
+
+    backend_masked, backend_redacted = mask_metadata_for_ai(ctx.get("backend_checks") or {})
+    ctx["backend_checks"] = backend_masked
+    redacted_keys.extend(backend_redacted)
+
+    return ctx
 
 
 # --------------------------------------------------
