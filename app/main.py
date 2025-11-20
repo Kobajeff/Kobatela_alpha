@@ -15,7 +15,11 @@ from app.core.runtime_state import set_scheduler_active
 import app.models  # enregistre les tables
 from app.routers import apikeys, get_api_router
 from app.services.cron import expire_mandates_once
-from app.services.scheduler_lock import release_scheduler_lock, try_acquire_scheduler_lock
+from app.services.scheduler_lock import (
+    refresh_scheduler_lock,
+    release_scheduler_lock,
+    try_acquire_scheduler_lock,
+)
 from app.utils.errors import error_response
 
 logger = get_logger(__name__)
@@ -100,6 +104,13 @@ async def lifespan(app: FastAPI):
                 "interval",
                 minutes=60,
                 id="expire-mandates",
+                replace_existing=True,
+            )
+            scheduler.add_job(
+                refresh_scheduler_lock,
+                "interval",
+                seconds=60,
+                id="scheduler-lock-heartbeat",
                 replace_existing=True,
             )
             set_scheduler_active(True)

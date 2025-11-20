@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -44,7 +45,7 @@ async def psp_webhook(
     payload = await request.json()
     event_id = x_psp_event_id or payload.get("id") or payload.get("event_id")
     if not event_id:
-        event_id = hashlib.sha1(body).hexdigest()
+        event_id = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     kind = payload.get("type") or payload.get("event") or "unknown"
     psp_ref = x_psp_ref or payload.get("psp_ref") or payload.get("payment_reference")
