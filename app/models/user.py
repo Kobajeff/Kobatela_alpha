@@ -13,6 +13,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    public_tag: Mapped[str] = mapped_column(String(10), default="private", nullable=False, index=True)
 
     sent_transactions = relationship(
         "Transaction", back_populates="sender", foreign_keys="Transaction.sender_id", cascade="all, delete-orphan"
