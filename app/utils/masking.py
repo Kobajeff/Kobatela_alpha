@@ -153,22 +153,19 @@ AI_MASK_PLACEHOLDER = "***redacted***"
 def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     """Whitelist + redaction for AI privacy (deny by default).
 
-    - Only explicitly allowlisted keys pass through unchanged (currency upper-cased).
-    - Keys matching sensitive patterns are replaced by a placeholder.
-    - All other keys are ignored (not sent to AI).
+    - Only allowlisted keys pass through unchanged (with currency upper-cased).
+    - Sensitive keys are masked and tracked.
+    - Unknown keys are dropped but recorded in ``_ai_redacted_keys``.
     """
 
     if not isinstance(metadata, Mapping):
         return {}
 
     cleaned: dict[str, Any] = {}
+    redacted_keys: list[str] = []
 
     for key, value in metadata.items():
         key_lower = key.lower()
-
-        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
-            cleaned[key] = AI_MASK_PLACEHOLDER
-            continue
 
         if key_lower in AI_ALLOWED_METADATA_KEYS:
             if key_lower == "invoice_currency" and isinstance(value, str):
@@ -176,6 +173,20 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
             else:
                 cleaned[key] = value
             continue
+
+        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
+            cleaned[key] = AI_MASK_PLACEHOLDER
+            redacted_keys.append(key)
+            continue
+
+        redacted_keys.append(key)
+
+    if redacted_keys:
+        cleaned["_ai_redacted_keys"] = redacted_keys
+        logger.debug(
+            "AI metadata keys redacted by mask_metadata_for_ai",
+            extra={"keys": redacted_keys},
+        )
 
     return cleaned
 

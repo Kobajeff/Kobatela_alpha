@@ -122,7 +122,7 @@ def test_mask_metadata_for_ai_drops_unknown_keys():
     assert masked["email"] == "***redacted***"
     assert masked["invoice_total_amount"] == 123.45
     assert masked["invoice_currency"] == "EUR"
-    assert "client_secret" not in masked
+    assert masked["_ai_redacted_keys"] == ["iban_full", "email", "client_secret"]
 
 
 @pytest.mark.anyio("asyncio")
