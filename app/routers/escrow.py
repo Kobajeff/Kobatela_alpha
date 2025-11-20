@@ -26,8 +26,14 @@ def create_escrow(
     api_key: ApiKey = Depends(require_scope({ApiScope.sender})),
 ) -> EscrowAgreement:
     actor = actor_from_api_key(api_key, fallback="apikey:unknown")
-    current_user = db.get(User, api_key.user_id) if getattr(api_key, "user_id", None) else None
-    return escrow_service.create_escrow(db, payload, actor=actor, current_user=current_user)
+    current_user: User | None = None
+    user_id = getattr(api_key, "user_id", None)
+    if user_id is not None:
+        current_user = db.get(User, user_id)
+
+    return escrow_service.create_escrow(
+        db, payload, actor=actor, current_user=current_user
+    )
 
 
 @router.post("/{escrow_id}/deposit", response_model=EscrowRead, status_code=status.HTTP_200_OK)

@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.escrow import EscrowAgreement
-from app.models.gov_public import GovProject, GovProjectMandate
+from app.models.gov_public import GovProject, GovProjectMandate, GovProjectManager
 from app.models.milestone import Milestone, MilestoneStatus
 from app.models.payment import Payment, PaymentStatus
 from app.models.user import User
@@ -28,6 +28,21 @@ def get_project(db: Session, project_id: int, current_user: User) -> GovProject:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=error_response("FORBIDDEN", "Not a public user."),
+        )
+
+    is_manager = db.scalar(
+        select(GovProjectManager.id).where(
+            GovProjectManager.gov_project_id == project.id,
+            GovProjectManager.user_id == current_user.id,
+        )
+    )
+    if not is_manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(
+                "FORBIDDEN",
+                "User is not assigned to this public project.",
+            ),
         )
 
     return project

@@ -133,4 +133,10 @@ def healthcheck() -> dict[str, object]:
         "migrations_ok": migration_ok,
         "migrations_status": migration_status,
         "scheduler_lock": describe_scheduler_lock(),
+        "features": {
+            "kct_public": {
+                "enabled": True,
+                "note": "Public Sector Lite (GovTrust/AidTrack) routes available for GOV/ONG accounts.",
+            }
+        },
     }
