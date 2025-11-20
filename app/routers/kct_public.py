@@ -105,7 +105,7 @@ def attach_project_mandate(
             detail=error_response("NOT_FOUND", "Escrow not found."),
         )
 
-    if escrow.domain != project.domain:
+    if escrow.domain.value != project.domain:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_response(

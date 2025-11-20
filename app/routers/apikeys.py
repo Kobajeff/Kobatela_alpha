@@ -26,6 +26,7 @@ class CreateKeyIn(BaseModel):
     name: str
     scope: ApiScope
     days_valid: int | None = 90
+    user_id: int | None = None
 
     @field_validator("name")
     @classmethod
@@ -49,6 +50,7 @@ class ApiKeyRead(BaseModel):
     id: int
     name: str
     scope: ApiScope
+    user_id: int | None
     is_active: bool
     created_at: datetime
     expires_at: datetime | None
@@ -77,6 +79,7 @@ def create_api_key(payload: CreateKeyIn, db: Session = Depends(get_db)) -> ApiKe
         prefix=prefix,
         key_hash=key_hash,
         scope=payload.scope,
+        user_id=payload.user_id,
         created_at=now,
         expires_at=expires_at,
         is_active=True,
