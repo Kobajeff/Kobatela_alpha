@@ -28,6 +28,7 @@ Readiness score (staging MVP): **80 / 100** — Solid route coverage and guards 
 | Transactions & spend controls | `/spend/*`, `/transactions` | OK | Allowlist/categories/merchants/purchases with idempotency and admin transaction CRUD plus audited reads. 【F:app/routers/transactions.py†L21-L86】【F:app/routers/spend.py†L21-L116】 |
 | AI & OCR toggles | `ai_proof_flags`, `invoice_ocr` | Partial | Flags present; OCR provider is dummy-only; AI circuit breaker in-memory. 【F:app/services/ai_proof_flags.py†L5-L22】【F:app/services/invoice_ocr.py†L179-L217】 |
 | Scheduler | Lifespan + DB lock | OK | Owner+TTL lock with refresh/release and health description; single-runner APScheduler design. 【F:app/services/scheduler_lock.py†L36-L116】【F:app/main.py†L64-L134】 |
+| Public Sector Lite (GovTrust/AidTrack) | `/kct_public/*` | OK | Aggregates KCT escrows for GOV/ONG users; no new monetary routes, domain-aligned mandates only. 【F:app/routers/kct_public.py†L21-L163】【F:app/security.py†L99-L143】 |
 
 ### B.2 End-to-end journeys supported today
 - Photo proof: submit → EXIF/geofence validation → optional AI advisory → auto-approve if validations pass → payout execution with idempotent keying and audits. 【F:app/services/proofs.py†L126-L454】
