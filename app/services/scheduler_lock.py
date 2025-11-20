@@ -58,15 +58,19 @@ def try_acquire_scheduler_lock(
             )
 
             if lock is None:
-                session.add(
-                    SchedulerLock(
-                        name=name,
-                        owner=owner,
-                        acquired_at=now,
-                        expires_at=expires,
-                    )
-                )
-                return True
+                try:
+                    with session.begin_nested():
+                        session.add(
+                            SchedulerLock(
+                                name=name,
+                                owner=owner,
+                                acquired_at=now,
+                                expires_at=expires,
+                            )
+                        )
+                    return True
+                except IntegrityError:
+                    return False
 
             expires_at = lock.expires_at
             if expires_at is not None and expires_at.tzinfo is None:
@@ -83,6 +87,36 @@ def try_acquire_scheduler_lock(
                 return True
 
             return False
+    finally:
+        if should_close:
+            session.close()
+
+
+def refresh_scheduler_lock(
+    name: str = LOCK_NAME, *, ttl_seconds: int = LOCK_TTL_SECONDS, db_session: Session | None = None
+) -> None:
+    """Refresh the TTL of the scheduler lock when owned by this runner."""
+
+    session, should_close = _session(db_session)
+    if session is None:
+        return
+
+    owner = _owner_id()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=ttl_seconds)
+
+    try:
+        with session.begin():
+            lock = (
+                session.execute(
+                    select(SchedulerLock).where(SchedulerLock.name == name).with_for_update()
+                ).scalar_one_or_none()
+            )
+            if lock and lock.owner == owner:
+                lock.expires_at = expires
+    except IntegrityError:
+        session.rollback()
+        return False
     finally:
         if should_close:
             session.close()
