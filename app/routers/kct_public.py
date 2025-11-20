@@ -141,8 +141,10 @@ def list_projects(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_public_user),
 ):
-    _ = current_user  # satisfies dependency while allowing future manager checks
-    stmt = select(GovProject).where(GovProject.domain.in_(["public", "aid"]))
+    stmt = select(GovProject).join(GovProjectManager).where(
+        GovProjectManager.user_id == current_user.id,
+        GovProject.domain.in_(["public", "aid"]),
+    )
 
     if domain:
         stmt = stmt.where(GovProject.domain == domain)
