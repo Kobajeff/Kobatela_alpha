@@ -431,6 +431,9 @@ def call_ai_proof_advisor(
             _AI_ERRORS += 1
             return _fallback_ai_result("missing_api_key")
 
+        # Apply strict privacy sanitization
+        sanitized_context = _sanitize_context(context)
+        user_content = build_ai_user_content(sanitized_context)
         if OpenAI is None:
             status = "missing_sdk"
             outcome_reason = "missing_sdk"
