@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import logging
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from fastapi import APIRouter
@@ -11,13 +13,13 @@ from fastapi import APIRouter
 from app.config import Settings, get_settings
 from app.core.runtime_state import is_scheduler_active
 from app.db import get_engine
+from app.services.ai_proof_advisor import get_ai_stats
 from app.services.ai_proof_flags import ai_enabled
+from app.services.invoice_ocr import get_ocr_stats
 from app.services.scheduler_lock import describe_scheduler_lock
 
 router = APIRouter(prefix="/health", tags=["health"])
 logger = logging.getLogger(__name__)
-
-LATEST_MIGRATION_REV = "4e1bd5489e1c"
 
 def _psp_webhook_secret_status() -> str:
     """Return 'missing' | 'partial' | 'ok' depending on PSP webhook secrets."""
@@ -57,14 +59,27 @@ def _db_status() -> tuple[bool, str]:
         return False, "error"
 
 
+def _expected_migration_head() -> str | None:
+    try:
+        config = Config("alembic.ini")
+        script = ScriptDirectory.from_config(config)
+        return script.get_current_head()
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to load Alembic head revision")
+        return None
+
+
 def _migrations_status() -> tuple[bool, str]:
+    expected_head = _expected_migration_head()
     try:
         engine = get_engine()
         with engine.connect() as conn:
             result = conn.execute(text("SELECT version_num FROM alembic_version"))
             current = result.scalar()
-        if current == LATEST_MIGRATION_REV:
+        if expected_head and current == expected_head:
             return True, "up_to_date"
+        if expected_head is None:
+            return False, "unknown"
         return False, "out_of_date"
     except Exception:  # noqa: BLE001
         logger.exception("Migration check failed")
@@ -92,7 +107,10 @@ def healthcheck() -> dict[str, object]:
     primary_secret = settings.psp_webhook_secret
     secondary_secret = settings.psp_webhook_secret_next
     db_ok, db_status = _db_status()
-    migration_ok, migration_status = _migrations_status()
+    if db_ok:
+        migration_ok, migration_status = _migrations_status()
+    else:
+        migration_ok, migration_status = False, "unknown"
     degraded = not (db_ok and migration_ok)
     return {
         "status": "degraded" if degraded else "ok",
@@ -101,6 +119,8 @@ def healthcheck() -> dict[str, object]:
         "psp_webhook_secret_fingerprints": _psp_secret_fingerprints(settings),
         "ocr_enabled": bool(settings.INVOICE_OCR_ENABLED),
         "ai_proof_enabled": ai_enabled(),
+        "ai_metrics": get_ai_stats(),
+        "ocr_metrics": get_ocr_stats(),
         "scheduler_config_enabled": bool(settings.SCHEDULER_ENABLED),
         "scheduler_running": is_scheduler_active(),
         "db_ok": db_ok,

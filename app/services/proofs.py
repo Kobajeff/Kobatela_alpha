@@ -1,6 +1,6 @@
 """Proof lifecycle services."""
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import os
 
 from fastapi import HTTPException, status
@@ -334,7 +334,14 @@ def submit_proof(
     )
     if ai_result:
         proof.ai_risk_level = ai_result.get("risk_level")
-        proof.ai_score = ai_result.get("score")
+        score = ai_result.get("score")
+        if score is None:
+            proof.ai_score = None
+        else:
+            try:
+                proof.ai_score = Decimal(str(score))
+            except (InvalidOperation, TypeError, ValueError):
+                proof.ai_score = None
         proof.ai_flags = list(ai_result.get("flags") or [])
         proof.ai_explanation = ai_result.get("explanation")
         proof.ai_checked_at = utcnow()
