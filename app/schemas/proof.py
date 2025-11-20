@@ -2,7 +2,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class ProofCreate(BaseModel):
@@ -38,6 +38,10 @@ class ProofRead(BaseModel):
     invoice_currency: str | None = None
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    @field_serializer("ai_score", when_used="json")
+    def _serialize_ai_score(self, value: Decimal | None):
+        return float(value) if value is not None else None
 
 
 class ProofDecision(BaseModel):
