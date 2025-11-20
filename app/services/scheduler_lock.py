@@ -1,19 +1,21 @@
 """Simple DB-backed lock to ensure only one scheduler runs."""
 from __future__ import annotations
 
-from datetime import UTC, timedelta
+import os
+import socket
+import os
+import socket
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import db
 from app.models.scheduler_lock import SchedulerLock
-from app.utils.time import utcnow
 
 
 LOCK_NAME = "default"
-LOCK_TTL = timedelta(minutes=10)
+LOCK_TTL_SECONDS = 300
 
 
 def _session(db_session: Session | None = None) -> tuple[Session | None, bool]:
@@ -27,34 +29,87 @@ def _session(db_session: Session | None = None) -> tuple[Session | None, bool]:
     return session_factory(), True
 
 
-def try_acquire_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None = None) -> bool:
-    """Attempt to acquire the scheduler lock with TTL-based eviction."""
+def _owner_id() -> str:
+    return f"{socket.gethostname()}-{os.getpid()}"
+
+
+def try_acquire_scheduler_lock(
+    name: str = LOCK_NAME,
+    *,
+    ttl_seconds: int = LOCK_TTL_SECONDS,
+    db_session: Session | None = None,
+) -> bool:
+    """Attempt to acquire the scheduler lock with owner + TTL safety."""
 
     session, should_close = _session(db_session)
     if session is None:
         return False
 
-    try:
-        now = utcnow()
-        existing = session.execute(select(SchedulerLock).where(SchedulerLock.name == name)).scalar_one_or_none()
-        if existing:
-            acquired_at = existing.acquired_at
-            if acquired_at.tzinfo is None:
-                acquired_at = acquired_at.replace(tzinfo=UTC)
-            else:
-                acquired_at = acquired_at.astimezone(UTC)
-            if (now - acquired_at) > LOCK_TTL:
-                session.delete(existing)
-                session.commit()
-            else:
-                return False
+    owner = _owner_id()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=ttl_seconds)
 
-        session.add(SchedulerLock(name=name, acquired_at=now))
-        session.commit()
-        return True
-    except IntegrityError:
-        session.rollback()
-        return False
+    try:
+        with session.begin():
+            lock = (
+                session.execute(
+                    select(SchedulerLock).where(SchedulerLock.name == name).with_for_update()
+                ).scalar_one_or_none()
+            )
+
+            if lock is None:
+                session.add(
+                    SchedulerLock(
+                        name=name,
+                        owner=owner,
+                        acquired_at=now,
+                        expires_at=expires,
+                    )
+                )
+                return True
+
+            expires_at = lock.expires_at
+            if expires_at is not None and expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+            if expires_at is None or expires_at <= now:
+                lock.owner = owner
+                lock.acquired_at = now
+                lock.expires_at = expires
+                return True
+
+            if lock.owner == owner:
+                lock.expires_at = expires
+                return True
+
+            return False
+    finally:
+        if should_close:
+            session.close()
+
+
+def refresh_scheduler_lock(
+    name: str = LOCK_NAME, *, ttl_seconds: int = LOCK_TTL_SECONDS, db_session: Session | None = None
+) -> None:
+    """Refresh the TTL of the scheduler lock when owned by this runner."""
+
+    session, should_close = _session(db_session)
+    if session is None:
+        return
+
+    owner = _owner_id()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=ttl_seconds)
+
+    try:
+        with session.begin():
+            lock = (
+                session.execute(
+                    select(SchedulerLock).where(SchedulerLock.name == name).with_for_update()
+                ).scalar_one_or_none()
+            )
+            if lock and lock.owner == owner:
+                lock.expires_at = expires
     finally:
         if should_close:
             session.close()
@@ -67,30 +122,55 @@ def release_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None 
     if session is None:
         return
 
+    owner = _owner_id()
     try:
-        existing = session.execute(select(SchedulerLock).where(SchedulerLock.name == name)).scalar_one_or_none()
-        if existing:
-            session.delete(existing)
-            session.commit()
+        context_manager = session.begin_nested() if session.in_transaction() else session.begin()
+        with context_manager:
+            lock = (
+                session.execute(
+                    select(SchedulerLock).where(SchedulerLock.name == name).with_for_update()
+                ).scalar_one_or_none()
+            )
+            if lock and lock.owner == owner:
+                session.delete(lock)
     finally:
         if should_close:
             session.close()
 
 
-# ---------------------------------------------------------------------------
-# R4 – Scheduler lock hardening plan
-# ---------------------------------------------------------------------------
-# 1. Alembic migration: add nullable ``owner_id`` (String) and ``expires_at``
-#    (DateTime with timezone) columns to ``scheduler_locks``.
-# 2. Extend ``SchedulerLock`` model to include these fields plus convenience
-#    helpers to compute expiry windows.
-# 3. Update ``try_acquire_scheduler_lock`` to:
-#      - compute ``owner_id`` as "<hostname>:<pid>" and ``expires_at`` as
-#        ``acquired_at + LOCK_TTL``,
-#      - consider locks stale when ``expires_at`` is in the past or missing,
-#        deleting stale rows before acquiring the lock.
-# 4. Update ``release_scheduler_lock`` to optionally filter by ``owner_id`` so
-#    that only the holder (or legacy callers with owner-less locks) can release.
-# 5. Enhance ``/health`` (and other diagnostics) to expose the current
-#    ``scheduler_lock_owner`` and ``scheduler_lock_expires_in`` to help SREs
-#    understand which instance owns the lock and when it will time out.
+def describe_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None = None) -> dict[str, object]:
+    """Return a lightweight description of the current scheduler lock state."""
+
+    session, should_close = _session(db_session)
+    if session is None:
+        return {"status": "unknown", "owner": None}
+
+    owner = _owner_id()
+    try:
+        lock = session.execute(select(SchedulerLock).where(SchedulerLock.name == name)).scalar_one_or_none()
+        if lock is None:
+            return {"status": "none", "owner": None, "present": False}
+
+        now = datetime.now(timezone.utc)
+        acquired_at = lock.acquired_at
+        if acquired_at is not None and acquired_at.tzinfo is None:
+            acquired_at = acquired_at.replace(tzinfo=timezone.utc)
+        expires_at = getattr(lock, "expires_at", None)
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        age_seconds = (now - acquired_at).total_seconds() if acquired_at else None
+        expires_in = (expires_at - now).total_seconds() if expires_at else None
+
+        status = "owned_by_self" if lock.owner == owner else "owned_by_other"
+        return {
+            "status": status,
+            "owner": lock.owner,
+            "present": True,
+            "age_seconds": age_seconds,
+            "expires_in_seconds": expires_in,
+            "stale": expires_in is not None and expires_in < -60,
+        }
+    finally:
+        if should_close:
+            session.close()

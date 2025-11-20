@@ -2,6 +2,8 @@ from decimal import Decimal
 
 import pytest
 
+from decimal import Decimal
+
 from app.models import EscrowAgreement, EscrowStatus, Milestone, MilestoneStatus, Proof, User
 from app.services.ai_proof_advisor import _sanitize_context
 from app.utils.time import utcnow
@@ -25,11 +27,31 @@ def test_sanitize_context_masks_sensitive_fields():
     sanitized = _sanitize_context(context)
 
     masked_meta = sanitized["document_context"].get("metadata") or {}
-    assert "iban_full" not in masked_meta
-    assert "email" not in masked_meta
+    assert masked_meta["iban_full"] == "***redacted***"
+    assert masked_meta["email"] == "***redacted***"
     assert masked_meta["supplier_name"] == "Very Sensitive Supplier"
     assert sanitized["mandate_context"]["beneficiary_name"] == "***masked***"
     assert sanitized["backend_checks"]["iban_check"] is True
+
+
+def test_mask_metadata_for_ai_drops_unknown_keys():
+    from app.utils.masking import mask_metadata_for_ai
+
+    masked = mask_metadata_for_ai(
+        {
+            "iban_full": "BE68539007547034",
+            "email": "john@doe.com",
+            "invoice_total_amount": 123.45,
+            "invoice_currency": "eur",
+            "client_secret": "super-secret",
+        }
+    )
+
+    assert masked["iban_full"] == "***redacted***"
+    assert masked["email"] == "***redacted***"
+    assert masked["invoice_total_amount"] == 123.45
+    assert masked["invoice_currency"] == "eur"
+    assert "client_secret" not in masked
 
 
 @pytest.mark.anyio("asyncio")
