@@ -33,23 +33,43 @@ logger = logging.getLogger(__name__)
 _AI_FAILURES = 0
 _AI_FAILURE_THRESHOLD = 5
 _AI_CIRCUIT_OPEN = False
+_AI_CIRCUIT_OPENED_AT: float | None = None
+_AI_CIRCUIT_COOLDOWN_SECONDS = 120
 
 
 def _should_skip_ai() -> bool:
-    return _AI_CIRCUIT_OPEN
+    global _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPENED_AT, _AI_FAILURES
+
+    if not _AI_CIRCUIT_OPEN:
+        return False
+
+    if _AI_CIRCUIT_OPENED_AT is None:
+        return True
+
+    cooldown_elapsed = time.monotonic() - _AI_CIRCUIT_OPENED_AT
+    if cooldown_elapsed >= _AI_CIRCUIT_COOLDOWN_SECONDS:
+        _AI_CIRCUIT_OPEN = False
+        _AI_CIRCUIT_OPENED_AT = None
+        _AI_FAILURES = 0
+        return False
+
+    return True
 
 
 def _record_ai_failure():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPENED_AT
     _AI_FAILURES += 1
     if _AI_FAILURES >= _AI_FAILURE_THRESHOLD:
         _AI_CIRCUIT_OPEN = True
+        if _AI_CIRCUIT_OPENED_AT is None:
+            _AI_CIRCUIT_OPENED_AT = time.monotonic()
 
 
 def _record_ai_success():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPENED_AT
     _AI_FAILURES = 0
     _AI_CIRCUIT_OPEN = False
+    _AI_CIRCUIT_OPENED_AT = None
 
 # --------------------------------------------------
 # 1️⃣ Core prompt (cacheable, ne change plus sans versioning)
