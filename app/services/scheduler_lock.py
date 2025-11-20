@@ -8,6 +8,7 @@ import socket
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import db
@@ -83,6 +84,9 @@ def try_acquire_scheduler_lock(
                 return True
 
             return False
+    except IntegrityError:
+        session.rollback()
+        return False
     finally:
         if should_close:
             session.close()
