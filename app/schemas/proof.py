@@ -27,7 +27,7 @@ class ProofRead(BaseModel):
     updated_at: datetime
 
     ai_risk_level: str | None = None
-    ai_score: float | None = None
+    ai_score: Decimal | None = None
     ai_flags: list[str] | None = None
     ai_explanation: str | None = None
     ai_checked_at: datetime | None = None
