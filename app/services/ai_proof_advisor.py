@@ -310,15 +310,15 @@ def _sanitize_context(context: dict) -> dict:
 
     cleaned_context = deepcopy(context)
 
-    # Mandate context
+    # Mandate context – keep non-sensitive signals, redact only sensitive keys
     mandate = cleaned_context.get("mandate_context", {}) or {}
     mandate = mandate if isinstance(mandate, dict) else {}
-    cleaned_context["mandate_context"] = mask_metadata_for_ai(mandate)
+    cleaned_context["mandate_context"] = _mask_sensitive_only(mandate)
 
-    # Backend checks
+    # Backend checks – keep computed signals, redact only sensitive keys
     backend = cleaned_context.get("backend_checks", {}) or {}
     backend = backend if isinstance(backend, dict) else {}
-    cleaned_context["backend_checks"] = mask_metadata_for_ai(backend)
+    cleaned_context["backend_checks"] = _mask_sensitive_only(backend)
 
     # Document context
     doc_ctx = cleaned_context.get("document_context", {}) or {}
