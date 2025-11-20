@@ -161,8 +161,8 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(metadata, Mapping):
         return {}
 
-    cleaned: dict[str, Any] = {}
-    redacted_keys: list[str] = []
+    cleaned = {}
+    redacted_keys = []
 
     for key, value in metadata.items():
         key_lower = key.lower()
