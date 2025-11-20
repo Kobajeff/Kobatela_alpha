@@ -1,10 +1,11 @@
 """Escrow schemas."""
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.escrow import EscrowStatus
+from app.models.escrow import EscrowDomain, EscrowStatus
 
 
 class EscrowCreate(BaseModel):
@@ -14,6 +15,7 @@ class EscrowCreate(BaseModel):
     currency: str = Field(pattern="^(USD|EUR)$")
     release_conditions: dict
     deadline_at: datetime
+    domain: Literal["private", "public", "aid"] | None = None
 
 
 class EscrowRead(BaseModel):
@@ -23,6 +25,7 @@ class EscrowRead(BaseModel):
     amount_total: Decimal
     currency: str
     status: EscrowStatus
+    domain: EscrowDomain
     release_conditions_json: dict
     deadline_at: datetime
 

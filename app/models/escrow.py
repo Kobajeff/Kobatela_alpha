@@ -2,6 +2,7 @@
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum as PyEnum
+import enum
 
 from sqlalchemy import CheckConstraint, DateTime, Enum as SqlEnum, ForeignKey, Index, JSON, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -20,6 +21,12 @@ class EscrowStatus(str, PyEnum):
     CANCELLED = "CANCELLED"
 
 
+class EscrowDomain(str, enum.Enum):
+    PRIVATE = "private"
+    PUBLIC = "public"
+    AID = "aid"
+
+
 class EscrowAgreement(Base):
     """Represents an escrow agreement between client and provider."""
 
@@ -35,6 +42,12 @@ class EscrowAgreement(Base):
     amount_total: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
     status: Mapped[EscrowStatus] = mapped_column(SqlEnum(EscrowStatus), default=EscrowStatus.DRAFT, nullable=False)
+    domain: Mapped[EscrowDomain] = mapped_column(
+        SqlEnum(EscrowDomain, native_enum=False),
+        nullable=False,
+        default=EscrowDomain.PRIVATE,
+        index=True,
+    )
     release_conditions_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
