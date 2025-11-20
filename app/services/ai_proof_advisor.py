@@ -33,27 +33,47 @@ logger = logging.getLogger(__name__)
 _AI_FAILURES = 0
 _AI_FAILURE_THRESHOLD = 5
 _AI_CIRCUIT_OPEN = False
+_AI_CIRCUIT_OPENED_AT: float | None = None
 _AI_CALLS_TOTAL = 0
 _AI_ERRORS_TOTAL = 0
 
 
-def _should_skip_ai() -> bool:
-    return _AI_CIRCUIT_OPEN
+def _should_skip_ai(*, cooldown_seconds: int = 300) -> bool:
+    """Return True if the AI circuit is open and still within its cooldown window."""
+
+    global _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPENED_AT
+
+    if not _AI_CIRCUIT_OPEN:
+        return False
+
+    if _AI_CIRCUIT_OPENED_AT is None:
+        _AI_CIRCUIT_OPENED_AT = time.monotonic()
+        return True
+
+    elapsed = time.monotonic() - _AI_CIRCUIT_OPENED_AT
+    if elapsed >= cooldown_seconds:
+        _AI_CIRCUIT_OPEN = False
+        _AI_CIRCUIT_OPENED_AT = None
+        return False
+
+    return True
 
 
 def _record_ai_failure():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPENED_AT
     _record_ai_error()
     _AI_FAILURES += 1
     if _AI_FAILURES >= _AI_FAILURE_THRESHOLD:
         _AI_CIRCUIT_OPEN = True
+        _AI_CIRCUIT_OPENED_AT = time.monotonic()
 
 
 def _record_ai_success():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CALLS_TOTAL
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CIRCUIT_OPENED_AT, _AI_CALLS_TOTAL
     _AI_CALLS_TOTAL += 1
     _AI_FAILURES = 0
     _AI_CIRCUIT_OPEN = False
+    _AI_CIRCUIT_OPENED_AT = None
 
 
 def _record_ai_error():
