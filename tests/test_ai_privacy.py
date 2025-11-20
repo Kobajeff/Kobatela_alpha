@@ -105,15 +105,10 @@ def test_sanitize_context_masks_all_subcontexts():
     assert meta["iban_full"] == AI_MASK_PLACEHOLDER
     assert meta["invoice_currency"] == "USD"
     assert document["other_field"] == "kept_as_is"
-    assert set(cleaned.get("_ai_redacted_keys", [])) >= {
-        "beneficiary_iban",
-        "contact_email",
-        "iban_full",
-    }
 
 
 def test_mask_metadata_for_ai_preserves_allowed_without_redaction_marker():
-    masked, redacted = mask_metadata_for_ai(
+    masked = mask_metadata_for_ai(
         {
             "invoice_total_amount": 10,
             "invoice_currency": "usd",

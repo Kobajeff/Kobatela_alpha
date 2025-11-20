@@ -8,12 +8,13 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from copy import deepcopy
+from typing import Any, Dict, List, Mapping, Optional
 
 
 from app.config import get_settings
 from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
-from app.utils.masking import mask_metadata_for_ai, mask_proof_metadata
+from app.utils.masking import mask_metadata_for_ai
 
 try:
     from openai import (  # type: ignore[import-not-found]
@@ -254,12 +255,9 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a deep-copied context with sensitive fields masked."""
+    """Return a sanitized copy of the AI context, safe to send to the provider."""
 
-    try:
-        ctx = json.loads(json.dumps(context, ensure_ascii=False, default=str))
-    except (TypeError, ValueError):
-        ctx = {}
+    data = deepcopy(context)
 
     redacted_keys: list[str] = []
     doc = ctx.get("document_context") or {}
@@ -283,10 +281,6 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
     ctx["backend_checks"] = backend_masked
     redacted_keys.extend(backend_redacted)
 
-    if redacted_keys:
-        ctx["_ai_redacted_keys"] = redacted_keys
-    else:
-        ctx.pop("_ai_redacted_keys", None)
     return ctx
 
 
