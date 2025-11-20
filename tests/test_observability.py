@@ -1,3 +1,4 @@
+import json
 import pytest
 
 
@@ -80,3 +81,68 @@ def test_ai_circuit_breaker_opens_after_failures(monkeypatch):
 
     ai_proof_advisor._AI_FAILURES = 0
     ai_proof_advisor._AI_CIRCUIT_OPEN = False
+
+
+def test_ai_metrics_track_calls_and_errors(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    ai_proof_advisor._AI_CALLS_TOTAL = 0
+    ai_proof_advisor._AI_ERRORS_TOTAL = 0
+
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: False)
+
+    ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}},
+        proof_storage_url=None,
+    )
+
+    stats = ai_proof_advisor.get_ai_stats()
+    assert stats["calls"] == 1
+    assert stats["errors"] == 1
+
+    ai_proof_advisor._AI_CALLS_TOTAL = 0
+    ai_proof_advisor._AI_ERRORS_TOTAL = 0
+
+
+def test_ai_metrics_success_does_not_increment_errors(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    class DummySettings:
+        OPENAI_API_KEY = "test"
+
+    class DummyResponse:
+        output_text = json.dumps(
+            {
+                "risk_level": "clean",
+                "score": 0.9,
+                "flags": [],
+                "explanation": "ok",
+            }
+        )
+
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            self.responses = self
+
+        def create(self, *_args, **_kwargs):
+            return DummyResponse()
+
+    ai_proof_advisor._AI_CALLS_TOTAL = 0
+    ai_proof_advisor._AI_ERRORS_TOTAL = 0
+    ai_proof_advisor._AI_FAILURES = 0
+    ai_proof_advisor._AI_CIRCUIT_OPEN = False
+
+    monkeypatch.setattr(ai_proof_advisor, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: True)
+    monkeypatch.setattr(ai_proof_advisor, "ai_model", lambda: "model")
+    monkeypatch.setattr(ai_proof_advisor, "ai_timeout_seconds", lambda: 1)
+    monkeypatch.setattr(ai_proof_advisor, "OpenAI", DummyClient)
+
+    ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}},
+        proof_storage_url=None,
+    )
+
+    stats = ai_proof_advisor.get_ai_stats()
+    assert stats["calls"] == 1
+    assert stats["errors"] == 0

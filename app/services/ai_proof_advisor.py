@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 _AI_FAILURES = 0
 _AI_FAILURE_THRESHOLD = 5
 _AI_CIRCUIT_OPEN = False
+_AI_CALLS_TOTAL = 0
+_AI_ERRORS_TOTAL = 0
 
 
 def _should_skip_ai() -> bool:
@@ -41,15 +43,32 @@ def _should_skip_ai() -> bool:
 
 def _record_ai_failure():
     global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    _record_ai_error()
     _AI_FAILURES += 1
     if _AI_FAILURES >= _AI_FAILURE_THRESHOLD:
         _AI_CIRCUIT_OPEN = True
 
 
 def _record_ai_success():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CALLS_TOTAL
+    _AI_CALLS_TOTAL += 1
     _AI_FAILURES = 0
     _AI_CIRCUIT_OPEN = False
+
+
+def _record_ai_error():
+    global _AI_CALLS_TOTAL, _AI_ERRORS_TOTAL
+    _AI_CALLS_TOTAL += 1
+    _AI_ERRORS_TOTAL += 1
+
+
+def get_ai_stats() -> Dict[str, int]:
+    """Return basic runtime stats for AI Proof Advisor usage."""
+
+    return {
+        "calls": _AI_CALLS_TOTAL,
+        "errors": _AI_ERRORS_TOTAL,
+    }
 
 # --------------------------------------------------
 # 1️⃣ Core prompt (cacheable, ne change plus sans versioning)
@@ -288,6 +307,7 @@ def call_ai_proof_advisor(
             status = "circuit_breaker_open"
             outcome_reason = "circuit_breaker_open"
             logger.warning("AI circuit breaker open; skipping advisory call.")
+            _record_ai_error()
             return {
                 "risk_level": "warning",
                 "score": 0.5,
@@ -301,6 +321,7 @@ def call_ai_proof_advisor(
             logger.warning(
                 "AI Proof Advisor requested while feature is disabled; returning fallback result."
             )
+            _record_ai_error()
             return _fallback_response(
                 flags=["ai_disabled"],
                 explanation=(
@@ -314,6 +335,7 @@ def call_ai_proof_advisor(
             status = "missing_api_key"
             outcome_reason = "missing_api_key"
             logger.warning("OPENAI_API_KEY is not set; returning fallback AI result.")
+            _record_ai_error()
             return _fallback_response(
                 flags=["missing_api_key"],
                 explanation=(
@@ -328,6 +350,7 @@ def call_ai_proof_advisor(
             status = "missing_sdk"
             outcome_reason = "missing_sdk"
             logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
+            _record_ai_error()
             return _fallback_response(
                 flags=["missing_sdk"],
                 explanation=(
