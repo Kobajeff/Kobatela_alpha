@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 
@@ -279,28 +280,29 @@ def _sanitize_context(context: dict) -> dict:
     if not isinstance(context, dict):
         return {}
 
+    cleaned_context = deepcopy(context)
+
     # Mandate context
-    mandate = context.get("mandate_context", {}) or {}
-    cleaned_mandate = mask_metadata_for_ai(mandate)
+    mandate = cleaned_context.get("mandate_context", {}) or {}
+    mandate = mandate if isinstance(mandate, dict) else {}
+    cleaned_context["mandate_context"] = mask_metadata_for_ai(mandate)
 
     # Backend checks
-    backend = context.get("backend_checks", {}) or {}
-    cleaned_backend = mask_metadata_for_ai(backend)
+    backend = cleaned_context.get("backend_checks", {}) or {}
+    backend = backend if isinstance(backend, dict) else {}
+    cleaned_context["backend_checks"] = mask_metadata_for_ai(backend)
 
     # Document context
-    doc_ctx = context.get("document_context", {}) or {}
+    doc_ctx = cleaned_context.get("document_context", {}) or {}
+    doc_ctx = doc_ctx if isinstance(doc_ctx, dict) else {}
     doc_meta = doc_ctx.get("metadata", {}) or {}
 
-    cleaned_doc_ctx = {
+    cleaned_context["document_context"] = {
         **doc_ctx,
-        "metadata": mask_metadata_for_ai(doc_meta)
+        "metadata": mask_metadata_for_ai(doc_meta),
     }
 
-    return {
-        "mandate_context": cleaned_mandate,
-        "backend_checks": cleaned_backend,
-        "document_context": cleaned_doc_ctx,
-    }
+    return cleaned_context
 
 
 # --------------------------------------------------
