@@ -14,6 +14,13 @@ from .spend import (
     SpendCategoryRead,
 )
 from .mandates import UsageMandateCreate, UsageMandateRead
+from .kct_public import (
+    GovProjectCreate,
+    GovProjectMandateCreate,
+    GovProjectManagerCreate,
+    GovProjectRead,
+    PublicDomain,
+)
 from .transaction import (
     AllowlistCreate,
     CertificationCreate,
@@ -49,4 +56,9 @@ __all__ = [
     "TransactionRead",
     "UserCreate",
     "UserRead",
+    "PublicDomain",
+    "GovProjectCreate",
+    "GovProjectRead",
+    "GovProjectManagerCreate",
+    "GovProjectMandateCreate",
 ]
