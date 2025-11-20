@@ -3,7 +3,7 @@ from .alert import AlertRead
 from .escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate, EscrowRead
 from .milestone import MilestoneCreate, MilestoneRead
 from .payment import PaymentRead
-from .proof import ProofCreate, ProofRead
+from .proof import ProofCreate, ProofDecision, ProofRead
 from .spend import (
     AllowedUsageCreate,
     MerchantCreate,
@@ -13,6 +13,7 @@ from .spend import (
     SpendCategoryCreate,
     SpendCategoryRead,
 )
+from .mandates import UsageMandateCreate, UsageMandateRead
 from .transaction import (
     AllowlistCreate,
     CertificationCreate,
@@ -31,6 +32,7 @@ __all__ = [
     "MilestoneRead",
     "PaymentRead",
     "ProofCreate",
+    "ProofDecision",
     "ProofRead",
     "AllowedUsageCreate",
     "MerchantCreate",
@@ -39,6 +41,8 @@ __all__ = [
     "PurchaseRead",
     "SpendCategoryCreate",
     "SpendCategoryRead",
+    "UsageMandateCreate",
+    "UsageMandateRead",
     "AllowlistCreate",
     "CertificationCreate",
     "TransactionCreate",

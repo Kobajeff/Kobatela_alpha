@@ -1,17 +1,91 @@
 """Application configuration settings."""
-from functools import lru_cache
-from pydantic import BaseModel
+from __future__ import annotations
+
+import os
+import time
+
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# --- Runtime toggles -----------------------------------------------------
+# Environnement d'exécution: "dev" | "staging" | "prod"
+ENV = os.getenv("KOB_ENV", "dev").lower()
+
+# Clé legacy (uniquement tolérée en DEV)
+DEV_API_KEY = os.getenv("DEV_API_KEY") or os.getenv("API_KEY") or "dev-secret-key"
+DEV_API_KEY_ALLOWED = ENV in {"dev", "local", "dev_local"}
+
+# Scopes reconnus
+API_SCOPES = {"sender", "support", "admin"}
+
+# Scheduler (optionnel)
+SCHEDULER_ENABLED = os.getenv("KOB_SCHEDULER_ENABLED", "0") in {
+    "1",
+    "true",
+    "yes",
+    "True",
+    "YES",
+}
+SCHEDULER_CRON = os.getenv("KOB_SCHEDULER_CRON", "0 3 * * *")
 
 
 class Settings(BaseSettings):
     """Environment configuration for the Kobatella backend."""
 
-    app_env: str = "dev"
+    app_env: str = ENV
     database_url: str = "sqlite:///kobatella.db"
-    api_key: str = "dev-secret-key"
+    psp_webhook_secret: str | None = None
+    psp_webhook_secret_next: str | None = None
+    psp_webhook_max_drift_seconds: int = 300
+    SECRET_KEY: str = "change-me"
+    DEV_API_KEY: str | None = Field(
+        default=DEV_API_KEY,
+        validation_alias=AliasChoices("DEV_API_KEY", "API_KEY"),
+    )
+    DEV_API_KEY_ALLOWED: bool = DEV_API_KEY_ALLOWED
+    CORS_ALLOW_ORIGINS: list[str] = [
+        "https://kobatela.com",
+        "https://app.kobatela.com",
+        "http://localhost:3000",
+    ]
+    SENTRY_DSN: str | None = None
+    PROMETHEUS_ENABLED: bool = True
 
-    model_config = SettingsConfigDict(env_file=".env", env_prefix="", env_file_encoding="utf-8")
+    # --- AI Proof Advisor (MVP) ------------------------------------------
+    AI_PROOF_ADVISOR_ENABLED: bool = False
+    AI_PROOF_ADVISOR_PROVIDER: str = "openai"
+    AI_PROOF_ADVISOR_MODEL: str = "gpt-5.1-mini"
+    AI_PROOF_MAX_IMAGE_RESOLUTION_X: int = 1600
+    AI_PROOF_MAX_IMAGE_RESOLUTION_Y: int = 1200
+    AI_PROOF_MAX_PDF_PAGES: int = 5
+    AI_PROOF_TIMEOUT_SECONDS: int = 12
+    OPENAI_API_KEY: str | None = None
+
+    # --- Invoice OCR -----------------------------------------------------
+    INVOICE_OCR_ENABLED: bool = False
+    INVOICE_OCR_PROVIDER: str = "none"
+    INVOICE_OCR_API_KEY: str | None = None
+
+    # --- Scheduler -------------------------------------------------------
+    SCHEDULER_ENABLED: bool = SCHEDULER_ENABLED
+    SCHEDULER_CRON: str = SCHEDULER_CRON
+
+    # --- Lifespan safeguards --------------------------------------------
+    ALLOW_DB_CREATE_ALL: bool = False
+
+    model_config = SettingsConfigDict(
+        env_file=".env", env_prefix="", env_file_encoding="utf-8"
+    )
+
+    @field_validator("psp_webhook_secret", "psp_webhook_secret_next")
+    @classmethod
+    def _strip_empty_secret(cls, value: str | None) -> str | None:
+        """Normalise empty webhook secrets to ``None`` for easier validation."""
+
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class AppInfo(BaseModel):
@@ -19,8 +93,41 @@ class AppInfo(BaseModel):
     version: str = "0.1.0"
 
 
-@lru_cache
-def get_settings() -> Settings:
-    """Return cached application settings."""
+_SETTINGS_CACHE: Settings | None = None
+_SETTINGS_LOADED_AT: float | None = None
+_SETTINGS_TTL_SECONDS = 60.0
 
-    return Settings()
+
+def get_settings() -> Settings:
+    """Return cached application settings with a TTL refresh."""
+
+    global _SETTINGS_CACHE, _SETTINGS_LOADED_AT
+    now = time.time()
+
+    if _SETTINGS_CACHE is None or _SETTINGS_LOADED_AT is None:
+        _SETTINGS_CACHE = Settings()
+        _SETTINGS_LOADED_AT = now
+        return _SETTINGS_CACHE
+
+    if now - _SETTINGS_LOADED_AT > _SETTINGS_TTL_SECONDS:
+        _SETTINGS_CACHE = Settings()
+        _SETTINGS_LOADED_AT = now
+
+    return _SETTINGS_CACHE
+
+
+settings = get_settings()
+
+
+__all__ = [
+    "ENV",
+    "DEV_API_KEY",
+    "DEV_API_KEY_ALLOWED",
+    "API_SCOPES",
+    "SCHEDULER_ENABLED",
+    "SCHEDULER_CRON",
+    "Settings",
+    "AppInfo",
+    "settings",
+    "get_settings",
+]

@@ -1,5 +1,6 @@
 """Schemas for proof entities."""
 from datetime import datetime
+from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,7 +11,7 @@ class ProofCreate(BaseModel):
     type: str = Field(min_length=1, max_length=50)
     storage_url: str = Field(min_length=1, max_length=1024)
     sha256: str = Field(min_length=1, max_length=128)
-    metadata_: dict | None = None
+    metadata: dict | None = None
 
 
 class ProofRead(BaseModel):
@@ -20,9 +21,28 @@ class ProofRead(BaseModel):
     type: str
     storage_url: str
     sha256: str
-    metadata_: dict | None
+    metadata: dict | None = Field(default=None, validation_alias="metadata_")
     status: str
     created_at: datetime
     updated_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    ai_risk_level: str | None = None
+    ai_score: float | None = None
+    ai_flags: list[str] | None = None
+    ai_explanation: str | None = None
+    ai_checked_at: datetime | None = None
+    ai_reviewed_by: str | None = None
+    ai_reviewed_at: datetime | None = None
+
+    invoice_total_amount: Decimal | None = None
+    invoice_currency: str | None = None
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class ProofDecision(BaseModel):
+    decision: str = Field(
+        pattern="^(approve|approved|reject|rejected)$",
+        description="Decision outcome",
+    )
+    note: str | None = None
