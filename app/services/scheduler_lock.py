@@ -8,6 +8,7 @@ import socket
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import db
@@ -58,15 +59,19 @@ def try_acquire_scheduler_lock(
             )
 
             if lock is None:
-                session.add(
-                    SchedulerLock(
-                        name=name,
-                        owner=owner,
-                        acquired_at=now,
-                        expires_at=expires,
-                    )
-                )
-                return True
+                try:
+                    with session.begin_nested():
+                        session.add(
+                            SchedulerLock(
+                                name=name,
+                                owner=owner,
+                                acquired_at=now,
+                                expires_at=expires,
+                            )
+                        )
+                    return True
+                except IntegrityError:
+                    return False
 
             expires_at = lock.expires_at
             if expires_at is not None and expires_at.tzinfo is None:
