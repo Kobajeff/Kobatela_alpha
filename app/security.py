@@ -161,8 +161,10 @@ def require_public_user(
 ) -> User:
     """Ensure the API key is linked to a GOV/ONG user and return it."""
 
-    user_id = getattr(api_key, "user_id", None)
-    user = db.get(User, user_id) if user_id is not None else None
+    user = getattr(api_key, "user", None)
+    if user is None:
+        user_id = getattr(api_key, "user_id", None)
+        user = db.get(User, user_id) if user_id is not None else None
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

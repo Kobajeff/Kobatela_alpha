@@ -3,10 +3,15 @@ from __future__ import annotations
 from datetime import datetime, UTC
 import enum
 
-from sqlalchemy import Boolean, DateTime, Enum, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from typing import Optional, TYPE_CHECKING
+
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
+
+if TYPE_CHECKING:  # pragma: no cover
+    from app.models.user import User
 
 
 class ApiScope(str, enum.Enum):
@@ -27,5 +32,7 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    user: Mapped[Optional["User"]] = relationship("User", backref="api_keys")
 
     __table_args__ = (UniqueConstraint("prefix", name="uq_api_keys_prefix"),)
