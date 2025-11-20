@@ -150,12 +150,12 @@ SENSITIVE_PATTERNS = (
 AI_MASK_PLACEHOLDER = "***redacted***"
 
 
-def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> tuple[dict[str, Any], list[str]]:
+def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     """Whitelist + redaction for AI privacy (deny by default).
 
-    - Only explicitly allowlisted keys pass through unchanged (currency upper-cased).
-    - Keys matching sensitive patterns are replaced by a placeholder.
-    - All other keys are ignored (not sent to AI) but tracked as redacted.
+    - Only allowlisted keys pass through unchanged (with currency upper-cased).
+    - Sensitive keys are masked and tracked.
+    - Unknown keys are dropped but recorded in ``_ai_redacted_keys``.
     """
 
     if not isinstance(metadata, Mapping):
@@ -180,6 +180,13 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> tuple[dict[str, 
             continue
 
         redacted_keys.append(key)
+
+    if redacted_keys:
+        cleaned["_ai_redacted_keys"] = redacted_keys
+        logger.debug(
+            "AI metadata keys redacted by mask_metadata_for_ai",
+            extra={"keys": redacted_keys},
+        )
 
     return cleaned, redacted_keys
 
