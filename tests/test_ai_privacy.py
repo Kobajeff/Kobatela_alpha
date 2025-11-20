@@ -72,3 +72,26 @@ def test_ai_redacts_unknown_keys():
     assert "custom_field" not in meta
     assert "_ai_redacted_keys" in meta
     assert "custom_field" in meta["_ai_redacted_keys"]
+
+
+def test_ai_preserves_backend_and_mandate_signals():
+    ctx = {
+        "backend_checks": {
+            "distance": 12.5,
+            "date_diff_days": 3,
+            "duplicate_hash": "abc123",
+        },
+        "mandate_context": {
+            "mandate_amount": 2500,
+            "mandate_currency": "EUR",
+        },
+        "document_context": {"metadata": {}},
+    }
+
+    cleaned = _sanitize_context(ctx)
+
+    assert cleaned["backend_checks"]["distance"] == 12.5
+    assert cleaned["backend_checks"]["date_diff_days"] == 3
+    assert cleaned["backend_checks"]["duplicate_hash"] == "abc123"
+    assert cleaned["mandate_context"]["mandate_amount"] == 2500
+    assert cleaned["mandate_context"]["mandate_currency"] == "EUR"
