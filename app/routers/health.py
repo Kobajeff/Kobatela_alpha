@@ -17,7 +17,7 @@ from app.services.scheduler_lock import describe_scheduler_lock
 router = APIRouter(prefix="/health", tags=["health"])
 logger = logging.getLogger(__name__)
 
-LATEST_MIGRATION_REV = "4e1bd5489e1c"
+LATEST_MIGRATION_REV = "1b4f3d4e7f0e"
 
 def _psp_webhook_secret_status() -> str:
     """Return 'missing' | 'partial' | 'ok' depending on PSP webhook secrets."""
