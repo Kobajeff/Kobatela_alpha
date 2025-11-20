@@ -24,9 +24,6 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
-MAX_WEBHOOK_AGE_SECONDS = 120
-
-
 def _current_settings():
     return get_settings()
 
@@ -123,11 +120,16 @@ def verify_psp_webhook_signature(raw_body: bytes, headers: Mapping[str, str]) ->
             )
 
     now = int(time.time())
+    allowed_drift = settings.psp_webhook_max_drift_seconds
     age = abs(now - ts_seconds)
-    if age > MAX_WEBHOOK_AGE_SECONDS:
+    if age > allowed_drift:
         logger.warning(
             "PSP webhook timestamp outside allowed window",
-            extra={"psp_secret_status": _masked_secret_status(secrets_info), "age": age},
+            extra={
+                "psp_secret_status": _masked_secret_status(secrets_info),
+                "age": age,
+                "max_drift_seconds": allowed_drift,
+            },
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
