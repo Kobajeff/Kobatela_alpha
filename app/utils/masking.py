@@ -131,6 +131,8 @@ AI_ALLOWED_METADATA_KEYS = {
     "ocr_provider",
     "file_mime_type",
     "file_pages",
+    "exif_timestamp",
+    "source",
 }
 
 SENSITIVE_PATTERNS = (
