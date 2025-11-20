@@ -4,9 +4,10 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from app.config import settings
+from app.config import get_settings
 from app.models import (
     EscrowAgreement,
     EscrowStatus,
@@ -154,6 +155,7 @@ async def test_proof_approval_triggers_payment(client, auth_headers, db_session)
 
 
 def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
+    settings = get_settings()
     original_flag = settings.AI_PROOF_ADVISOR_ENABLED
     settings.AI_PROOF_ADVISOR_ENABLED = True
     stub_result = {
@@ -246,6 +248,8 @@ def test_submit_proof_uses_ocr_invoice_fields(monkeypatch, db_session):
 
     assert proof.invoice_total_amount == Decimal("321.00")
     assert proof.invoice_currency == "EUR"
+    assert proof.metadata_["invoice_total_amount"] == "321.00"
+    assert proof.metadata_["invoice_currency"] == "eur"
 
 
 def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
@@ -253,8 +257,8 @@ def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
 
     def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
         enriched = dict(existing_metadata or {})
-        enriched.setdefault("invoice_total_amount", Decimal("999.99"))
-        enriched.setdefault("invoice_currency", "eur")
+        enriched.setdefault("ocr", {})["invoice_total_amount"] = Decimal("999.99")
+        enriched.setdefault("ocr", {})["invoice_currency"] = "eur"
         return enriched
 
     monkeypatch.setattr(
@@ -277,3 +281,37 @@ def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
 
     assert proof.invoice_total_amount == Decimal("150.50")
     assert proof.invoice_currency == "GBP"
+    assert proof.metadata_["invoice_total_amount"] == "150.50"
+    assert proof.metadata_["invoice_currency"] == "gbp"
+    assert proof.metadata_["ocr"]["invoice_total_amount"] == "999.99"
+    assert proof.metadata_["ocr"]["invoice_currency"] == "eur"
+
+
+def test_submit_proof_invalid_currency_returns_422(monkeypatch, db_session):
+    escrow, milestone = _create_pdf_milestone(db_session)
+
+    def fake_enrich(*, storage_url: str, existing_metadata: dict | None):
+        enriched = dict(existing_metadata or {})
+        enriched.setdefault("invoice_currency", "usd4")
+        return enriched
+
+    monkeypatch.setattr(
+        proofs_service,
+        "enrich_metadata_with_invoice_ocr",
+        fake_enrich,
+    )
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://storage.example.com/proofs/doc.pdf",
+        sha256="hash-invoice-proof-invalid-currency",
+        metadata={},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+
+    assert exc.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert exc.value.detail["error"]["code"] == "INVOICE_NORMALIZATION_ERROR"

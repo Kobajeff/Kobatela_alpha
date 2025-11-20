@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from fastapi import APIRouter
 
-from app.config import SCHEDULER_ENABLED, Settings, get_settings
+from app.config import Settings, get_settings
 from app.core.runtime_state import is_scheduler_active
 from app.db import get_engine
 from app.services.ai_proof_flags import ai_enabled
@@ -46,29 +46,29 @@ def _secret_status(primary: str | None, secondary: str | None) -> str:
     return "missing"
 
 
-def _db_status() -> str:
+def _db_status() -> tuple[bool, str]:
     try:
         engine = get_engine()
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return "ok"
+        return True, "ok"
     except Exception:  # noqa: BLE001
         logger.exception("DB health check failed")
-        return "error"
+        return False, "error"
 
 
-def _migrations_status() -> str:
+def _migrations_status() -> tuple[bool, str]:
     try:
         engine = get_engine()
         with engine.connect() as conn:
             result = conn.execute(text("SELECT version_num FROM alembic_version"))
             current = result.scalar()
         if current == LATEST_MIGRATION_REV:
-            return "up_to_date"
-        return "out_of_date"
+            return True, "up_to_date"
+        return False, "out_of_date"
     except Exception:  # noqa: BLE001
         logger.exception("Migration check failed")
-        return "unknown"
+        return False, "unknown"
 
 
 def _psp_secret_fingerprints(settings: Settings) -> dict[str, str | None]:
@@ -91,9 +91,9 @@ def healthcheck() -> dict[str, object]:
     settings = get_settings()
     primary_secret = settings.psp_webhook_secret
     secondary_secret = settings.psp_webhook_secret_next
-    db_status = _db_status()
-    migration_status = _migrations_status()
-    degraded = db_status != "ok" or migration_status != "up_to_date"
+    db_ok, db_status = _db_status()
+    migration_ok, migration_status = _migrations_status()
+    degraded = not (db_ok and migration_ok)
     return {
         "status": "degraded" if degraded else "ok",
         "psp_webhook_configured": bool(primary_secret or secondary_secret),
@@ -101,9 +101,11 @@ def healthcheck() -> dict[str, object]:
         "psp_webhook_secret_fingerprints": _psp_secret_fingerprints(settings),
         "ocr_enabled": bool(settings.INVOICE_OCR_ENABLED),
         "ai_proof_enabled": ai_enabled(),
-        "scheduler_config_enabled": bool(getattr(settings, "SCHEDULER_ENABLED", SCHEDULER_ENABLED)),
+        "scheduler_config_enabled": bool(settings.SCHEDULER_ENABLED),
         "scheduler_running": is_scheduler_active(),
+        "db_ok": db_ok,
         "db_status": db_status,
+        "migrations_ok": migration_ok,
         "migrations_status": migration_status,
         "scheduler_lock": describe_scheduler_lock(),
     }

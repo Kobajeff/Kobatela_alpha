@@ -80,5 +80,11 @@ async def test_ai_and_ocr_audit_logs(monkeypatch, db_session):
     )
 
     actions = {log.action for log in logs}
-    assert "AI_PROOF_ANALYSIS" in actions
+    assert "AI_PROOF_ASSESSMENT" in actions
     assert "INVOICE_OCR_RUN" in actions
+
+    ai_logs = [log for log in logs if log.action == "AI_PROOF_ASSESSMENT"]
+    assert ai_logs
+    ai_data = ai_logs[0].data_json
+    assert ai_data.get("risk_level") == "warning"
+    assert ai_data.get("flags") == ["ai_test"]

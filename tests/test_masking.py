@@ -13,6 +13,6 @@ def test_mask_metadata_for_ai_drops_unknown_fields():
     safe = mask_metadata_for_ai(metadata)
 
     assert safe["invoice_total_amount"] == 100
-    assert safe["invoice_currency"] == "eur"
+    assert safe["invoice_currency"] == "EUR"
     assert safe["iban_full"] == "***redacted***"
     assert "supplier_tax_id" not in safe
