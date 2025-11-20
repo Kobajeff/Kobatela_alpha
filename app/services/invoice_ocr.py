@@ -117,13 +117,18 @@ def normalize_invoice_metadata(raw: dict[str, Any]) -> dict[str, Any]:
             out["invoice_total_amount"] = None
             errors.append("invalid_invoice_total_amount")
 
-    raw_currency = (raw.get("invoice_currency") or raw.get("currency") or "").strip().upper()
-    if raw_currency:
-        if len(raw_currency) == 3 and raw_currency.isalpha():
-            out["invoice_currency"] = raw_currency
-        else:
-            out["invoice_currency"] = None
-            errors.append("invalid_invoice_currency")
+    raw_currency_value = raw.get("invoice_currency") or raw.get("currency")
+    if isinstance(raw_currency_value, str):
+        raw_currency = raw_currency_value.strip().upper()
+        if raw_currency:
+            if len(raw_currency) == 3 and raw_currency.isalpha():
+                out["invoice_currency"] = raw_currency
+            else:
+                out["invoice_currency"] = None
+                errors.append("invalid_invoice_currency")
+    elif raw_currency_value is not None:
+        out["invoice_currency"] = None
+        errors.append("invalid_invoice_currency")
 
     if errors:
         out["normalization_errors"] = errors
