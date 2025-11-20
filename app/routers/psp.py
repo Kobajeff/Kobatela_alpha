@@ -33,7 +33,7 @@ async def psp_webhook(
     raw_body = await request.body()
     headers = {k: v for k, v in request.headers.items()}
 
-    psp_webhooks.verify_psp_webhook_signature(raw_body, headers)
+    timestamp = psp_webhooks.verify_psp_webhook_signature(raw_body, headers)
 
     payload = await request.json()
     event_id = (
@@ -46,6 +46,8 @@ async def psp_webhook(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=error_response("MISSING_EVENT_ID", "Webhook event_id is required."),
         )
+
+    psp_webhooks.ensure_not_recent_replay(event_id, timestamp)
 
     kind = payload.get("type") or payload.get("event") or "unknown"
     provider = payload.get("provider") or "default"

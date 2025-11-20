@@ -9,10 +9,30 @@ from typing import Any, Dict, Optional, Tuple
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+_OCR_CALLS_TOTAL = 0
+_OCR_ERRORS_TOTAL = 0
 
 
 def _current_settings():
     return get_settings()
+
+
+def _record_ocr_success() -> None:
+    global _OCR_CALLS_TOTAL
+    _OCR_CALLS_TOTAL += 1
+
+
+def _record_ocr_error() -> None:
+    global _OCR_CALLS_TOTAL, _OCR_ERRORS_TOTAL
+    _OCR_CALLS_TOTAL += 1
+    _OCR_ERRORS_TOTAL += 1
+
+
+def get_ocr_stats() -> Dict[str, int]:
+    return {
+        "calls": _OCR_CALLS_TOTAL,
+        "errors": _OCR_ERRORS_TOTAL,
+    }
 
 
 def invoice_ocr_enabled() -> bool:
@@ -172,6 +192,7 @@ def enrich_metadata_with_invoice_ocr(
         logger.info("Invoice OCR disabled; skipping enrichment for %s", storage_url)
         metadata["ocr_status"] = "disabled"
         metadata["ocr_provider"] = provider
+        _record_ocr_success()
         return metadata
 
     try:
@@ -198,6 +219,7 @@ def enrich_metadata_with_invoice_ocr(
 
         metadata["ocr_status"] = "success"
         metadata["ocr_provider"] = provider
+        _record_ocr_success()
         return metadata
 
     except Exception as exc:  # noqa: BLE001
@@ -205,6 +227,7 @@ def enrich_metadata_with_invoice_ocr(
         logger.exception("Invoice OCR failed for %s: %s", storage_url, exc)
         metadata["ocr_status"] = "error"
         metadata["ocr_provider"] = provider
+        _record_ocr_error()
         return metadata
     finally:
         duration = time.monotonic() - start
