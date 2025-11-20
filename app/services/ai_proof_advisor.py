@@ -30,6 +30,27 @@ except Exception:  # noqa: BLE001
 
 logger = logging.getLogger(__name__)
 
+_AI_FAILURES = 0
+_AI_FAILURE_THRESHOLD = 5
+_AI_CIRCUIT_OPEN = False
+
+
+def _should_skip_ai() -> bool:
+    return _AI_CIRCUIT_OPEN
+
+
+def _record_ai_failure():
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    _AI_FAILURES += 1
+    if _AI_FAILURES >= _AI_FAILURE_THRESHOLD:
+        _AI_CIRCUIT_OPEN = True
+
+
+def _record_ai_success():
+    global _AI_FAILURES, _AI_CIRCUIT_OPEN
+    _AI_FAILURES = 0
+    _AI_CIRCUIT_OPEN = False
+
 # --------------------------------------------------
 # 1️⃣ Core prompt (cacheable, ne change plus sans versioning)
 # --------------------------------------------------
@@ -263,6 +284,17 @@ def call_ai_proof_advisor(
     settings = get_settings()
 
     try:
+        if _should_skip_ai():
+            status = "circuit_breaker_open"
+            outcome_reason = "circuit_breaker_open"
+            logger.warning("AI circuit breaker open; skipping advisory call.")
+            return {
+                "risk_level": "warning",
+                "score": 0.5,
+                "flags": ["ai_unavailable", "circuit_breaker_open"],
+                "explanation": "AI circuit breaker open; skipping advisory.",
+            }
+
         if not ai_enabled():
             status = "disabled"
             outcome_reason = "ai_disabled"
@@ -365,6 +397,7 @@ def call_ai_proof_advisor(
 
         raw_data = json.loads(raw_text)
         result = _normalize_ai_result(raw_data)
+        _record_ai_success()
         return result
 
     except Exception as exc:  # noqa: BLE001
@@ -372,6 +405,7 @@ def call_ai_proof_advisor(
             status = "rate_limited"
             outcome_reason = "rate_limited"
             logger.warning("AI proof advisor rate limited", extra={"error": str(exc)})
+            _record_ai_failure()
             return _fallback_response(
                 flags=["rate_limited_or_timeout"],
                 score=0.4,
@@ -384,6 +418,7 @@ def call_ai_proof_advisor(
             status = "timeout"
             outcome_reason = "timeout"
             logger.warning("AI proof advisor timeout", extra={"error": str(exc)})
+            _record_ai_failure()
             return _fallback_response(
                 flags=["rate_limited_or_timeout"],
                 score=0.4,
@@ -395,6 +430,7 @@ def call_ai_proof_advisor(
             status = "api_error"
             outcome_reason = "api_error"
             logger.exception("AI proof advisor API error: %s", exc)
+            _record_ai_failure()
             return _fallback_response(
                 flags=["api_error"],
                 score=0.4,
@@ -411,6 +447,7 @@ def call_ai_proof_advisor(
             "AI proof advisor fallback response emitted",
             extra={"reason": "exception_during_call"},
         )
+        _record_ai_failure()
         return _fallback_response(
             flags=["exception_during_call"],
             score=0.4,

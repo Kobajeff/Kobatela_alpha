@@ -210,7 +210,8 @@ def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
         db_session.refresh(proof)
 
         assert proof.ai_risk_level == stub_result["risk_level"]
-        assert proof.ai_score == stub_result["score"]
+        assert isinstance(proof.ai_score, Decimal)
+        assert proof.ai_score == Decimal("0.66")
         assert proof.ai_flags == stub_result["flags"]
         assert proof.ai_explanation == stub_result["explanation"]
         assert proof.ai_checked_at is not None
