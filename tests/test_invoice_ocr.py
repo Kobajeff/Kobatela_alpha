@@ -1,6 +1,6 @@
-from decimal import Decimal
-
 import pytest
+
+from decimal import Decimal
 
 from app.services.invoice_ocr import (
     enrich_metadata_with_invoice_ocr,
@@ -95,21 +95,24 @@ def test_enrich_metadata_preserves_user_currency(monkeypatch):
 
 
 def test_normalize_invoice_amount_and_currency_happy_path():
-    amount, currency = normalize_invoice_amount_and_currency(
+    amount, currency, errors = normalize_invoice_amount_and_currency(
         {"invoice_total_amount": "1000.5", "invoice_currency": "usd"}
     )
 
     assert amount == Decimal("1000.50")
     assert currency == "USD"
+    assert errors == []
 
 
 def test_normalize_invoice_amount_and_currency_invalid_values():
-    amount, currency = normalize_invoice_amount_and_currency(
+    amount, currency, errors = normalize_invoice_amount_and_currency(
         {"invoice_total_amount": "abc", "invoice_currency": "US"}
     )
 
     assert amount is None
     assert currency is None
+    assert "invalid_invoice_total_amount" in errors
+    assert "invalid_invoice_currency" in errors
 
 
 def test_normalize_invoice_metadata_surfaces_errors():
