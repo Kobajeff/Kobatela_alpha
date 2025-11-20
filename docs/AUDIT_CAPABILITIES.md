@@ -1,4 +1,4 @@
-# Kobatela_alpha — Capability & Stability Audit (2026-05-07)
+# Kobatela_alpha — Capability & Stability Audit (2026-11-20)
 
 ## A. Executive summary
 - Escrow, spend, proof, and PSP flows use scoped API-key auth with idempotency on monetary endpoints, reducing double-spend risk and tying actions to actors.【F:app/routers/escrow.py†L14-L70】【F:app/routers/transactions.py†L17-L69】
