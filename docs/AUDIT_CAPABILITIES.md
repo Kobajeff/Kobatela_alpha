@@ -1,70 +1,62 @@
-# Kobatela_alpha — Capability & Stability Audit (2026-03-31)
+# Kobatela_alpha — Capability & Stability Audit (2026-05-07)
 
 ## A. Executive summary
-- Core fintech flows (escrow, spend, proofs, payments, PSP webhook) use scoped API-key auth, idempotency keys, and typed money columns to reduce double-spend and drift risks.【F:app/routers/escrow.py†L15-L71】【F:app/services/proofs.py†L97-L219】【F:app/routers/transactions.py†L17-L67】【F:app/models/proof.py†L29-L46】
-- Proof ingestion chains strict EXIF/geofence validation with optional OCR and AI advisory layers; AI outputs are server-side only and stored in dedicated read-only fields.【F:app/services/proofs.py†L137-L219】【F:app/models/proof.py†L29-L46】
-- Runtime configuration is centralized via `Settings` with short-lived cache; PSP/AI/OCR flags are read per-call and surfaced in `/health` together with scheduler lock status for ops visibility.【F:app/config.py†L32-L119】【F:app/routers/health.py†L55-L71】
-- PSP webhook handling now verifies HMAC signatures with timestamp skew protection and secret rotation support before persisting settlement events.【F:app/services/psp_webhooks.py†L27-L100】【F:app/routers/psp.py†L19-L60】
-- Distributed scheduler uses DB lock with owner+TTL, heartbeat refresh, and health exposure to stay safe across runners.【F:app/services/scheduler_lock.py†L34-L154】【F:app/routers/health.py†L68-L71】
+- Escrow, spend, proof, and PSP flows use scoped API-key auth with idempotency on monetary endpoints, reducing double-spend risk and tying actions to actors.【F:app/routers/escrow.py†L14-L70】【F:app/routers/transactions.py†L17-L69】
+- Proof ingestion enforces EXIF/geofence validation, merges OCR-enriched metadata, normalizes invoice totals/currency, and feeds the same normalized values into AI context and persisted columns.【F:app/services/proofs.py†L86-L219】【F:app/services/invoice_ocr.py†L102-L134】
+- AI Proof Advisor and masking now sanitize metadata with whitelist/redaction before sending to OpenAI, and fall back safely when disabled or misconfigured.【F:app/services/ai_proof_advisor.py†L215-L292】【F:app/utils/masking.py†L112-L169】
+- PSP webhook handling validates HMAC+timestamp, deduplicates events by event_id with DB uniqueness, and updates payments with audit on failures.【F:app/routers/psp.py†L20-L61】【F:app/services/psp_webhooks.py†L68-L205】【F:app/models/psp_webhook.py†L9-L20】
+- `/health` now reports PSP secret fingerprints/status, AI/OCR toggles, DB connectivity, migration head, and scheduler lock state for operational visibility.【F:app/routers/health.py†L20-L106】【F:app/services/scheduler_lock.py†L15-L94】
 
 Major risks / limitations:
-- AI/OCR privacy and masking rely on best-effort filtering; metadata allowlist is not comprehensive, so sensitive fields could still leak to the AI prompt.【F:app/services/ai_proof_advisor.py†L207-L220】
-- Monetary values extracted via OCR are normalized but still originate from JSON metadata before landing in typed columns, leaving room for inconsistent upstream formats.【F:app/services/proofs.py†L137-L146】【F:app/services/invoice_ocr.py†L102-L134】
-- PSP webhook verification depends on shared HMAC secrets without nonce tracking; replay attacks within the allowed timestamp window remain possible.【F:app/services/psp_webhooks.py†L58-L100】
-- Audit coverage is uneven: proof decisions and payment executions log audits, but AI/OCR invocations and some reads lack dedicated audit entries for forensics.【F:app/services/proofs.py†L220-L310】
-- Observability is limited: `/health` omits DB/alembic checks and there is no metrics/tracing pipeline, making incident triage harder.【F:app/routers/health.py†L55-L71】
+- AI masking allowlist is still best-effort; unlisted metadata keys are dropped rather than explicitly audited, and runtime context still includes non-masked backend fields.【F:app/services/ai_proof_advisor.py†L215-L236】
+- Settings are cached globally with a TTL; secrets loaded once at startup may lag rotations until refresh, and global `settings` variable remains exported.【F:app/config.py†L96-L132】
+- PSP webhook secrets are optional in config; missing secrets yield 503 but no staging/production guard, and drift window may still allow short replays despite event_id uniqueness.【F:app/routers/psp.py†L29-L43】【F:app/services/psp_webhooks.py†L68-L114】
+- AI/OCR and scheduler rely on synchronous DB access; heavy load or DB failures could cascade (no circuit breakers/async paths).【F:app/services/proofs.py†L181-L219】【F:app/services/scheduler_lock.py†L18-L94】
+- Test and migration commands were not executed for this audit; stability statements rely on static inspection only.
 
-Readiness score: **70 / 100** — strong functional coverage with recent PSP/scheduler hardening, but AI/OCR privacy, replay safeguards, and ops visibility need P0 attention before staging.
+Readiness score: **78 / 100** — functional coverage is broad and P0 fixes for replay, monetary normalization, and observability are present, but privacy hardening, config refresh, and runtime resilience need tightening before wider staging.
 
 ## B. Capability map (current features)
 ### B.1 Functional coverage
 | Feature | Endpoints / modules involved | Status (OK / Partial / Missing) | Notes |
 | --- | --- | --- | --- |
-| Health & runtime introspection | `/health`, scheduler lock describe | Partial | Shows AI/OCR flags, PSP secret fingerprints, scheduler lock; lacks DB/migration probes.【F:app/routers/health.py†L55-L71】 |
-| User & API key lifecycle | `/users`, `/apikeys` | Partial | CRUD with scope checks and audit on key actions; no pagination/search.【F:app/routers/apikeys.py†L41-L103】 |
-| Escrow lifecycle | `/escrows/*` | OK | Create, deposit (idempotent), deliver/approve/reject, deadline check, read with audit.【F:app/routers/escrow.py†L15-L71】 |
-| Mandates & spend controls | `/mandates`, `/spend/*`, `/transactions` | OK | Mandate setup/cleanup, spend categories/merchants/allowlist, purchases with idempotency and admin-led transactions.【F:app/routers/spend.py†L1-L200】【F:app/routers/transactions.py†L17-L67】 |
-| Proof submission & decision | `/proofs` | OK | Photo validation (EXIF/geofence), OCR enrichment, optional AI advisory, manual decision endpoint.【F:app/services/proofs.py†L137-L219】【F:app/routers/proofs.py†L21-L46】 |
-| Payments & PSP integration | `/payments/execute/{id}`, `/psp/webhook` | Partial | Manual payment execution plus webhook settlement; webhook HMAC lacks nonce/replay guard.【F:app/routers/payments.py†L14-L19】【F:app/services/psp_webhooks.py†L58-L100】 |
-| Alerts & monitoring | `/alerts` | OK | List alerts filtered by type (static).【F:app/routers/alerts.py†L1-L60】 |
-| AI & OCR toggles | `ai_proof_flags`, `invoice_ocr` | Partial | Runtime flags and OCR stub exist; masking/timeout coverage limited.【F:app/services/ai_proof_flags.py†L5-L19】【F:app/services/invoice_ocr.py†L17-L134】 |
+| Health & runtime introspection | `/health` | OK | Includes PSP secret fingerprints, AI/OCR flags, DB/migration checks, scheduler lock status.【F:app/routers/health.py†L20-L106】 |
+| User & API key lifecycle | `/users`, `/apikeys` | Partial | Scoped admin/support CRUD; limited pagination/search.
+| Escrow lifecycle | `/escrows/*` | OK | Create, deposit (idempotency), deliver/approve/reject, deadline check, read with audit log.【F:app/routers/escrow.py†L14-L70】 |
+| Proof submission & decision | `/proofs` | OK | EXIF/geofence validation, OCR enrichment, normalized invoice fields, AI advisory, manual decision endpoint with masking on responses.【F:app/routers/proofs.py†L20-L48】【F:app/services/proofs.py†L86-L219】 |
+| Payments & PSP integration | `/payments/execute/{id}`, `/psp/webhook` | OK | Manual execution plus HMAC/timestamp verification and replay-protected webhook processing that settles or errors payments with audit on failure.【F:app/routers/psp.py†L20-L61】【F:app/services/psp_webhooks.py†L68-L205】 |
+| Transactions & spend controls | `/spend/*`, `/transactions` | OK | Categories/merchants/allowlist, purchases with idempotency, admin transactions with audit on reads.【F:app/routers/transactions.py†L17-L69】 |
+| AI & OCR toggles | `ai_proof_flags`, `invoice_ocr` | Partial | Runtime flags and OCR stub/normalizer exist; no external provider implementation or metrics yet.【F:app/services/invoice_ocr.py†L23-L163】【F:app/services/ai_proof_advisor.py†L251-L292】 |
+| Scheduler | Lifespan + DB lock | OK | Owner+TTL lock with refresh/release and health description; still single-worker synchronous design.【F:app/services/scheduler_lock.py†L18-L154】 |
 
 ### B.2 End-to-end journeys supported today
-- Photo proof with auto-approve: submit proof → EXIF/geofence validation → optional AI advisory → milestone and payment progression when allowed.【F:app/services/proofs.py†L137-L219】
-- Invoice proof with OCR: upload document → OCR normalization/merge → backend checks → AI context → manual decision flow.【F:app/services/proofs.py†L137-L219】【F:app/services/document_checks.py†L36-L170】
-- Usage spend with policy: configure mandate/categories/merchants → allowlist payees → purchases/transactions with idempotency keys.【F:app/routers/spend.py†L1-L200】【F:app/routers/transactions.py†L17-L67】
-- PSP settlement: webhook verifies HMAC+timestamp → event persisted → payment settlement/error updates with audit log on failure.【F:app/routers/psp.py†L19-L60】【F:app/services/psp_webhooks.py†L102-L187】
-- Admin onboarding: create/revoke API keys and manage users with scope enforcement and audit of sensitive actions.【F:app/routers/apikeys.py†L41-L103】
+- Photo proof: submit → EXIF/geofence validation → optional AI advisory → auto-approve if validations pass and milestone/payout continue via services.【F:app/services/proofs.py†L106-L219】
+- Invoice/contract proof: submit → OCR enrichment → normalized totals/currency → backend checks → AI advisory (manual decision) → stored AI fields/metadata.【F:app/services/proofs.py†L93-L219】【F:app/services/invoice_ocr.py†L102-L163】
+- PSP settlement: webhook verifies signature/timestamp, deduplicates event_id, marks payments settled or errored with audit on failures.【F:app/routers/psp.py†L20-L61】【F:app/services/psp_webhooks.py†L68-L205】
+- Spend/transaction control: mandates/categories/merchants/allowlist plus purchases/transactions with idempotency and admin scopes.【F:app/routers/transactions.py†L17-L69】
+- Scheduler housekeeping: DB lock acquisition/refresh with health visibility for multi-runner safety.【F:app/services/scheduler_lock.py†L18-L154】【F:app/routers/health.py†L87-L106】
 
 ## C. Endpoint inventory
 | Method | Path | Handler | Auth | Roles | Request model | Response model | HTTP codes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/health` | `health.healthcheck` | None | – | – | dict | 200 |
-| POST | `/users` | `users.create_user` | API key | admin/support | `UserCreate` | `UserRead` | 201, 400 |
-| GET | `/users/{user_id}` | `users.get_user` | API key | admin/support | – | `UserRead` | 200, 404 |
-| POST | `/apikeys` | `apikeys.create_api_key` | API key | admin | `CreateKeyIn` | `ApiKeyCreateOut` | 201, 400 |
-| GET | `/apikeys/{api_key_id}` | `apikeys.get_apikey` | API key | admin | – | `ApiKeyRead` | 200, 404 |
-| DELETE | `/apikeys/{api_key_id}` | `apikeys.revoke_apikey` | API key | admin | – | – | 204, 404 |
-| POST | `/mandates` | `mandates.create_mandate` | API key | sender | `UsageMandateCreate` | `UsageMandateRead` | 201 |
-| POST | `/mandates/cleanup` | `mandates.cleanup_expired_mandates` | API key | sender | – | `{expired}` | 202 |
 | POST | `/escrows` | `escrow.create_escrow` | API key | sender | `EscrowCreate` | `EscrowRead` | 201 |
 | POST | `/escrows/{id}/deposit` | `escrow.deposit` | API key + Idempotency-Key | sender | `EscrowDepositCreate` | `EscrowRead` | 200 |
 | POST | `/escrows/{id}/mark-delivered` | `escrow.mark_delivered` | API key | sender | `EscrowActionPayload` | `EscrowRead` | 200 |
-| POST | `/escrows/{id}/client-approve` | `escrow.client_approve` | API key | sender | optional payload | `EscrowRead` | 200 |
-| POST | `/escrows/{id}/client-reject` | `escrow.client_reject` | API key | sender | optional payload | `EscrowRead` | 200 |
+| POST | `/escrows/{id}/client-approve` | `escrow.client_approve` | API key | sender | optional body | `EscrowRead` | 200 |
+| POST | `/escrows/{id}/client-reject` | `escrow.client_reject` | API key | sender | optional body | `EscrowRead` | 200 |
 | POST | `/escrows/{id}/check-deadline` | `escrow.check_deadline` | API key | sender | – | `EscrowRead` | 200 |
 | GET | `/escrows/{id}` | `escrow.read_escrow` | API key | sender/support/admin | – | `EscrowRead` | 200, 404 |
 | POST | `/proofs` | `proofs.submit_proof` | API key | sender | `ProofCreate` | `ProofRead` | 201, 404, 409, 422 |
 | POST | `/proofs/{id}/decision` | `proofs.decide_proof` | API key | support/admin | `ProofDecision` | `ProofRead` | 200, 400, 404 |
+| POST | `/payments/execute/{id}` | `payments.execute_payment` | API key | sender | – | `PaymentRead` | 200 |
+| POST | `/psp/webhook` | `psp.psp_webhook` | Secret headers | PSP | raw JSON | dict | 200, 401, 503 |
 | POST | `/spend/categories` | `spend.create_category` | API key | admin/support | `SpendCategoryCreate` | `SpendCategoryRead` | 201 |
 | POST | `/spend/merchants` | `spend.create_merchant` | API key | admin/support | `MerchantCreate` | `MerchantRead` | 201 |
 | POST | `/spend/allow` | `spend.allow_usage` | API key | admin/support | `AllowedUsageCreate` | dict | 201 |
 | POST | `/spend/purchases` | `spend.create_purchase` | API key + Idempotency-Key | sender/admin | `PurchaseCreate` | `PurchaseRead` | 201, 400 |
 | POST | `/spend/allowed` | `spend.add_allowed_payee` | API key | admin/support | `AddPayeeIn` | dict | 201 |
 | POST | `/spend` | `spend.spend` | API key + Idempotency-Key | sender/admin | `SpendIn` | dict | 200, 400 |
-| POST | `/payments/execute/{id}` | `payments.execute_payment` | API key | sender | – | `PaymentRead` | 200 |
-| POST | `/psp/webhook` | `psp.psp_webhook` | Secret header | PSP | raw JSON | dict | 200, 401, 503 |
-| GET | `/alerts` | `alerts.list_alerts` | API key | admin/support | query `type` | list[`AlertRead`] | 200 |
 | POST | `/allowlist` | `transactions.add_to_allowlist` | API key | admin | `AllowlistCreate` | dict | 201 |
 | POST | `/certified` | `transactions.add_certification` | API key | admin | `CertificationCreate` | dict | 201 |
 | POST | `/transactions` | `transactions.post_transaction` | API key + Idempotency-Key | admin | `TransactionCreate` | `TransactionRead` | 201, 400 |
@@ -72,92 +64,88 @@ Readiness score: **70 / 100** — strong functional coverage with recent PSP/sch
 
 ## D. Data model & state machines
 - Entities:
-  - EscrowAgreement/Milestone: Numeric(18,2) amounts, geofence floats, JSON `proof_requirements`, status enums tie milestones to proofs and payments.【F:app/services/proofs.py†L148-L219】【F:app/models/proof.py†L29-L46】
-  - Proof: unique sha256, JSON metadata, normalized invoice amount/currency columns, AI advisory fields (risk_level, score, flags, explanation, timestamps).【F:app/models/proof.py†L22-L46】
-  - Payment: Numeric amounts, PSP reference/status enum, settlement/error handling via webhook service.【F:app/services/psp_webhooks.py†L133-L187】
-  - SchedulerLock: unique name with owner, acquired_at, expires_at, timestamps for distributed locking.【F:app/models/scheduler_lock.py†L13-L21】
-  - APIKey/User/Allowlists/Spend: scoped API keys, allowlist/certified recipients, purchases/transactions with idempotency keys (per routers/services).
+  - Proof: unique sha256, JSON metadata, normalized invoice_total_amount (Numeric 18,2) and invoice_currency (String(3)), AI advisory fields (risk level/score/flags/explanation timestamps).【F:app/models/proof.py†L11-L48】
+  - Escrow/Milestone: Numeric amounts with statuses linked to proofs/payments (see services).【F:app/services/proofs.py†L75-L219】
+  - Payment: PSP reference/status updated by webhook handlers with audit on failures.【F:app/services/psp_webhooks.py†L138-L205】
+  - PSPWebhookEvent: unique event_id with indices for replay protection and payload persistence.【F:app/models/psp_webhook.py†L9-L20】
+  - SchedulerLock: unique name, owner, acquired_at, expires_at timestamps for distributed locks.【F:app/models/scheduler_lock.py†L11-L24】
+  - APIKey/User/Spend/Transactions: scoped auth, allowlists, categories/merchants, idempotency keys in routers.
 - State machines:
-  - Escrow: created → deposits → delivery → client approve/reject → payout via proof/payment flows.【F:app/routers/escrow.py†L15-L71】【F:app/services/proofs.py†L220-L310】
-  - Milestone/Proof: WAITING → PENDING_REVIEW/APPROVED/REJECTED; photo can auto-approve after validations; AI advisory adds flags without auto-approval for documents.【F:app/services/proofs.py†L137-L219】
-  - Payment: pending → settled/error via manual execution or PSP webhook updates.【F:app/services/psp_webhooks.py†L102-L187】
-  - Scheduler lock: acquire/refresh/release with TTL and owner; describe for health output.【F:app/services/scheduler_lock.py†L34-L154】
+  - Proof: SUBMITTED/PENDING_REVIEW → APPROVED/REJECTED; photo may auto-approve after validations; AI adds advisory metadata only.【F:app/services/proofs.py†L106-L219】
+  - Payment: pending → settled/error via manual execution or PSP webhook updates with audit on failure.【F:app/services/psp_webhooks.py†L138-L205】
+  - Scheduler lock: acquire/refresh/release with TTL and ownership; described for health checks.【F:app/services/scheduler_lock.py†L18-L154】
 
 ## E. Stability results
-- Static view of tests (not executed; inferred): coverage across health fingerprints, PSP webhook secrets/signatures, AI privacy/masking, OCR enrichment, scheduler lock contention/expiry, escrow/proof/payment lifecycles, spend idempotency, and transaction audit logs.【F:tests/test_health.py†L4-L16】【F:tests/test_ai_privacy.py†L1-L160】【F:tests/test_scheduler_lock.py†L1-L120】
-- Skips/xfail: none observed in reviewed files (static inspection).
+- Static view of tests: suite covers escrow, proofs (EXIF, AI review), OCR, AI masking/privacy, PSP webhook signatures/replay, scheduler locks, spend/transactions, and health telemetry (per filenames in `tests/`). No skipped markers observed from static scan.
 - Static review notes:
-  - External calls (AI/OCR) wrapped in broad try/except, but masking allowlist is limited; risk of sensitive metadata leakage remains.【F:app/services/ai_proof_advisor.py†L207-L220】
-  - Scheduler lock uses SessionLocal helper and TTL; relies on DB availability at startup/heartbeat without health probing.【F:app/services/scheduler_lock.py†L19-L154】
-  - OCR stub returns empty data when disabled/unsupported, preventing crashes but leaving accuracy untested.【F:app/services/invoice_ocr.py†L17-L134】
+  - Broad try/except around AI and OCR prevents crashes but hides provider errors; logging exists but no metrics.【F:app/services/ai_proof_advisor.py†L259-L292】【F:app/services/invoice_ocr.py†L147-L163】
+  - DB sessions are passed explicitly; synchronous blocking remains for webhook and scheduler paths.
+  - No commands executed during this audit; stability inferred from code and tests structure only.
 
 ## F. Security & integrity
-- AuthN/Z: API-key header with scope enforcement across routers; sender/support/admin scopes control access to financial and proof endpoints.【F:app/routers/transactions.py†L17-L67】【F:app/routers/proofs.py†L21-L46】
-- Input validation: Pydantic schemas enforce enums and required fields; monetary columns use Numeric/Decimal in models to avoid float drift.【F:app/models/proof.py†L29-L46】
-- File/proof validation: sha256 uniqueness, EXIF/GPS/geofence checks for photos, backend checks for documents, OCR enrichment prior to AI context.【F:app/services/proofs.py†L137-L219】【F:app/services/document_checks.py†L36-L170】
-- Secret management: Settings load PSP/AI/OCR secrets from env with strip validator; `/health` exposes fingerprints (first 8 hex) for rotation visibility.【F:app/config.py†L35-L89】【F:app/routers/health.py†L42-L71】
-- Audit/logging: AuditLog used for proof approvals/payments and PSP failures; transaction reads now audited; gaps remain for AI/OCR calls and some reads.【F:app/services/proofs.py†L220-L310】【F:app/routers/transactions.py†L45-L67】
+- AuthN/Z: API keys with scopes enforced per endpoint; PSP webhook uses secret headers; scheduler not exposed publicly.【F:app/routers/proofs.py†L20-L48】【F:app/routers/psp.py†L20-L61】
+- Input validation: Pydantic schemas enforce length/patterns; proof decisions restrict values; idempotency required on monetary POSTs.【F:app/schemas/proof.py†L43-L48】【F:app/routers/transactions.py†L43-L58】
+- File/proof validation: EXIF/geofence rules with hard failures for geofence/age issues; metadata sanitized for responses and AI.【F:app/services/proofs.py†L106-L219】【F:app/utils/masking.py†L64-L110】
+- Secrets/config: Settings define PSP/AI/OCR keys with defaults disabled; cached with TTL and accessible via health fingerprints.【F:app/config.py†L35-L116】【F:app/routers/health.py†L20-L106】
+- Audit/logging: Transaction reads and PSP failures log audits; escrow reads log audit entries; AI/OCR outcomes logged in metadata but not yet in AuditLog explicitly.【F:app/routers/transactions.py†L57-L69】【F:app/routers/escrow.py†L62-L70】
 
 ## G. Observability & operations
-- Logging: standard logger usage in services (PSP, AI/OCR, proofs) without structured correlation IDs.【F:app/services/psp_webhooks.py†L52-L187】【F:app/services/proofs.py†L137-L310】
-- Error handling: HTTPExceptions with error_response helper; AI/OCR failures fall back silently; webhook verification returns 401 with reason codes.【F:app/routers/psp.py†L28-L60】【F:app/services/ai_proof_advisor.py†L188-L220】
-- Alembic migrations: sequential revisions include scheduler lock owner/expiry and proof AI/Invoice fields (static inspection; commands not run).【F:alembic/versions/4e1bd5489e1c_add_owner_and_expires_to_scheduler_locks.py†L1-L34】
-- Deployment: lifespan uses scheduler heartbeat; `/health` reports scheduler status but no DB connectivity or migration drift checks.【F:app/routers/health.py†L55-L71】
+- Logging: Standard logging in services; no correlation IDs or structured log schema.【F:app/services/psp_webhooks.py†L56-L205】
+- HTTP error handling: Uses HTTPException with error_response codes; webhook returns 401 on signature failures and 503 when secrets missing.【F:app/routers/psp.py†L29-L44】
+- Alembic migrations: Head revision `4e1bd5489e1c` adds scheduler lock owner/expiry; initial schema includes PSP webhook events and proof AI fields (inferred from files, not executed).【F:alembic/versions/4e1bd5489e1c_add_owner_and_expires_to_scheduler_locks.py†L1-L31】【F:alembic/versions/baa4932d9a29_0001_init_schema.py†L31-L46】
+- Deployment/lifecycle: Scheduler lock acquired with TTL, refreshed/released on shutdown; health exposes DB/migration status and lock description.【F:app/services/scheduler_lock.py†L18-L154】【F:app/routers/health.py†L87-L106】
 
 ## H. Risk register (prioritized)
 | ID | Component | Risk | Impact | Likelihood | Priority (P0/P1/P2) | Recommendation |
 | --- | --- | --- | --- | --- | --- | --- |
-| R1 | Monetary/OCR normalization | OCR-derived amounts/currency originate in JSON and may retain float/string quirks before coercion into typed fields, risking inconsistencies between metadata, AI context, and stored columns. | High | Medium | P0 | Centralize Decimal coercion and validation before persistence; enforce schema-level constraints and add tests around OCR edge cases.【F:app/services/proofs.py†L137-L146】【F:app/services/invoice_ocr.py†L47-L99】 |
-| R2 | PSP webhook replay | HMAC+timestamp validation lacks nonce/replay tracking; windowed replays remain possible. | High | Medium | P0 | Add one-time nonce/event-id cache per timestamp window and enforce monotonic timestamps; document rotation/monitoring.【F:app/services/psp_webhooks.py†L58-L100】 |
-| R3 | Audit coverage | AI/OCR invocations and some read paths are not audited, reducing forensics on sensitive actions. | Medium | Medium | P0 | Add AuditLog entries for AI/OCR attempts (without sensitive payload), escrow reads, and payment executions where missing.【F:app/services/proofs.py†L220-L310】 |
-| R4 | AI/OCR privacy | Masking allowlist may omit sensitive metadata, enabling leakage to OpenAI; no rate-limit/timeout metrics. | High | Medium | P0 | Enforce explicit allowlist + redaction before `_sanitize_context`, add timeout/error metrics, and expand tests for sensitive keys.【F:app/services/ai_proof_advisor.py†L207-L220】 |
-| R5 | Observability/health | `/health` omits DB/migration checks; scheduler lock depends on DB without readiness probe. | Medium | Medium | P0 | Add DB ping/alembic head check to health, expose lock age/expiry, and alert on stale ownership.【F:app/routers/health.py†L55-L71】【F:app/services/scheduler_lock.py†L34-L154】 |
-| R6 | PSP secret ops | Missing requirement for both primary/next secrets in prod; rotation state only fingerprinted. | Medium | Low | P1 | Enforce at least one secret in non-dev and alert when only `next` is set; add metrics for signature failures.【F:app/routers/health.py†L55-L71】【F:app/services/psp_webhooks.py†L58-L100】 |
-| R7 | Performance/timeout | AI timeout fixed at 12s; OCR stub lacks timeout; long calls could block proof submission under load. | Medium | Low | P1 | Add configurable timeout and circuit breaker around external calls; consider async/background execution.【F:app/config.py†L54-L67】【F:app/services/invoice_ocr.py†L102-L134】 |
-| R8 | Data validation | Geofence/photo validations rely on raw floats and limited bounds; document checks accept wide inputs. | Medium | Low | P2 | Tighten Pydantic validators (lat/lon ranges, date formats) and add schema-level constraints for proof metadata fields.【F:app/services/proofs.py†L148-L219】【F:app/services/document_checks.py†L36-L170】 |
+| R1 | Monetary normalization | OCR/user metadata still drives invoice totals/currency; if malformed, values drop to None and AI/DB may diverge silently. | High | Medium | P0 | Enforce validation errors when currency code invalid; add explicit audit/log on normalization failures and schema-level constraints/tests.【F:app/services/proofs.py†L93-L104】【F:app/services/invoice_ocr.py†L102-L129】 |
+| R2 | PSP webhook secrets/anti-replay | Secrets optional; drift window allows short replays despite event_id uniqueness; no environment guard for missing secrets. | High | Medium | P0 | Require secret presence in non-dev, tighten timestamp window, and add nonce cache beyond DB uniqueness; emit metrics on signature failures.【F:app/routers/psp.py†L29-L43】【F:app/services/psp_webhooks.py†L68-L114】 |
+| R3 | Business audit coverage | AI/OCR invocations and payment success paths lack AuditLog entries; only certain reads are logged. | Medium | Medium | P0 | Add AuditLog for AI/OCR runs and payment settlements (not just failures) with sanitized payloads; ensure proof decisions already covered remain consistent.【F:app/services/proofs.py†L86-L219】【F:app/services/psp_webhooks.py†L138-L205】 |
+| R4 | Lifecycle & config refresh | Settings cached globally; scheduler/AI/OCR use synchronous DB/HTTP without circuit breakers; config rotation may lag up to TTL. | Medium | Medium | P0 | Remove exported global settings, rely solely on get_settings per call or reduce TTL; add heartbeat failure handling and timeouts/metrics around external calls.【F:app/config.py†L96-L132】【F:app/services/ai_proof_advisor.py†L259-L292】 |
+| R5 | AI/OCR privacy | Allowlist/redaction may omit unanticipated sensitive keys; backend_checks/mandate_context partially masked only. | High | Medium | P0 | Expand allowlist tests (IBAN/email/phone/custom keys), enforce redaction for unknown metadata before OpenAI call, and log dropped keys for tuning.【F:app/services/ai_proof_advisor.py†L215-L236】【F:app/utils/masking.py†L112-L169】 |
+| R6 | Observability | No metrics/tracing; health relies on DB access and hardcoded migration id; lacks readiness for external dependencies. | Medium | Medium | P1 | Add metrics for AI/OCR/PSP outcomes, dynamic migration head lookup, and graceful degraded health states.【F:app/routers/health.py†L20-L106】 |
 
 ## I. AI Proof Advisor, OCR & risk scoring (dedicated section)
 ### I.1 AI architecture
-- Config flags: `AI_PROOF_ADVISOR_ENABLED` (default False), provider/model, timeout, OpenAI API key, and OCR toggles (enabled/provider/key) all live in `Settings` and are read at runtime with TTL cache.【F:app/config.py†L54-L67】【F:app/services/ai_proof_flags.py†L5-L19】
-- Modules: AI flags helper, AI Proof Advisor service (prompt, masking, OpenAI call), document backend checks, invoice OCR stub/normalizer, AI/OCR fields on Proof model for server-side storage.【F:app/services/ai_proof_advisor.py†L1-L220】【F:app/services/document_checks.py†L36-L170】【F:app/services/invoice_ocr.py†L17-L134】【F:app/models/proof.py†L29-L46】
+- Config flags in `Settings`: AI_PROOF_ADVISOR_ENABLED (False by default), provider/model/timeout, OpenAI key; OCR flags/provider/api key likewise default to disabled/none.【F:app/config.py†L54-L68】
+- Modules: AI Proof Advisor builds prompts, sanitizes context, and handles fallbacks; masking utilities for metadata; invoice OCR normalizer/stub; document backend checks for comparisons.【F:app/services/ai_proof_advisor.py†L251-L292】【F:app/utils/masking.py†L112-L169】【F:app/services/invoice_ocr.py†L39-L163】【F:app/services/document_checks.py†L1-L170】
 
 ### I.2 AI integration into proof flows
-- Photo proofs: after EXIF/geofence validation, AI advisory optionally runs and attaches assessment to metadata and AI columns without blocking approval; auto-approve only if validations pass.【F:app/services/proofs.py†L148-L219】
-- Document proofs (PDF/INVOICE/CONTRACT): OCR enrichment merges fields without overwriting user data, backend checks compute comparisons, and AI advisory (if enabled) enriches metadata; decisions remain manual.【F:app/services/proofs.py†L137-L219】【F:app/services/document_checks.py†L36-L170】
-- AI outputs are server-set fields (`ai_risk_level`, `ai_score`, `ai_flags`, `ai_explanation`, `ai_checked_at`); clients cannot write them.【F:app/models/proof.py†L39-L46】
+- Photo proofs: AI advisory runs only after validations when enabled; result stored in metadata without blocking approval; invoice totals/currency passed from normalized helper.【F:app/services/proofs.py†L181-L219】
+- Document proofs: OCR enriches metadata, normalization computes typed amounts/currency, backend checks computed, AI advisory consumes sanitized metadata and stores assessment; decisions remain manual.【F:app/services/proofs.py†L93-L219】
+- AI outputs persisted in read-only model fields and surfaced via ProofRead; clients cannot write them.【F:app/models/proof.py†L39-L46】【F:app/schemas/proof.py†L29-L39】
 
 ### I.3 OCR & backend_checks
-- OCR toggle/provider from settings; default provider `none` returns empty result and marks status accordingly, avoiding hard failures.【F:app/services/invoice_ocr.py†L17-L134】
-- Normalization maps totals, currency, date, invoice number, supplier, and IBAN last4/masked before merging into metadata without overwriting existing keys.【F:app/services/invoice_ocr.py†L47-L99】【F:app/services/invoice_ocr.py†L102-L134】
-- Backend checks compute amount/iban/date/supplier comparisons against `proof_requirements`, returning structured flags for AI context; no exceptions on missing data.【F:app/services/document_checks.py†L36-L170】
+- OCR toggle/provider pulled from settings; provider `none` returns `{}` without failure; normalization maps totals/currency/date/supplier/IBAN last4/masked and sets ocr_status/provider flags without overwriting user data.【F:app/services/invoice_ocr.py†L17-L163】
+- Backend checks compare proof_requirements vs metadata (amount, IBAN, dates, supplier) returning structured flags for AI context; missing data handled gracefully.【F:app/services/document_checks.py†L36-L170】
 
 ### I.4 AI/OCR-specific risks
 | ID | Domain (AI/OCR) | Risk | Impact | Likelihood | Priority | Recommended fix |
 | --- | --- | --- | --- | --- | --- | --- |
-| AI1 | Privacy | Masking allowlist may miss sensitive metadata fields, leaking to AI provider. | High | Medium | P0 | Enforce strict allowlist/redaction before `_sanitize_context`; add tests for IBAN/email/PII masking.【F:app/services/ai_proof_advisor.py†L207-L220】 |
-| AI2 | Resilience | AI timeout/errors handled but without metrics; long calls could delay submissions. | Medium | Medium | P0 | Add metrics and stricter timeout/rate limiting; consider async/background AI evaluation.【F:app/config.py†L54-L67】【F:app/services/ai_proof_advisor.py†L188-L220】 |
-| AI3 | Data consistency | OCR values flow from metadata into AI context and typed columns; divergent parsing could mislead scoring. | High | Medium | P0 | Single-source normalization helper reused for DB and AI context; validate currency length/Decimal coercion with tests.【F:app/services/proofs.py†L137-L146】 |
-| AI4 | Auditability | AI/OCR calls not recorded in AuditLog, reducing traceability for risky automation. | Medium | Medium | P1 | Add audit events with non-sensitive payload for each AI/OCR invocation and fallback path.【F:app/services/proofs.py†L137-L219】 |
-| AI5 | Provider stub | OCR provider is stubbed; real provider integration may fail silently due to catch-all logging. | Medium | Low | P2 | Implement provider-specific adapters with explicit error surfaces and contract tests.【F:app/services/invoice_ocr.py†L23-L37】 |
+| AI1 | Privacy | Unknown metadata keys dropped instead of explicitly redacted; sensitive keys outside allowlist could be forwarded if added elsewhere. | High | Medium | P0 | Enforce default redaction for non-allowlisted keys and add regression tests for IBAN/email/phone/custom fields.【F:app/services/ai_proof_advisor.py†L215-L236】【F:app/utils/masking.py†L112-L169】 |
+| AI2 | Resilience | AI call synchronous with limited timeout; lacks metrics/retries; failures only logged. | Medium | Medium | P0 | Add metrics and configurable retries/circuit breaker; consider background processing for AI scoring.【F:app/services/ai_proof_advisor.py†L259-L292】 |
+| AI3 | Data consistency | Normalization quietly returns None on parse errors; AI context may omit financial data while metadata still contains raw strings. | High | Medium | P0 | Raise validation or mark normalization errors in metadata/audit; ensure AI context gets deterministic placeholders/tests.【F:app/services/invoice_ocr.py†L102-L129】 |
+| AI4 | Auditability | AI/OCR operations not inserted into AuditLog; forensic trace of automated assessments missing. | Medium | Medium | P1 | Add AuditLog entries for AI/OCR invocations with sanitized payload and outcome status.【F:app/services/proofs.py†L86-L219】 |
+| AI5 | Provider integration | OCR provider stub only; switching to real provider may lack error handling/contracts. | Medium | Low | P2 | Implement provider adapters with strict schema validation and contract tests before production enablement.【F:app/services/invoice_ocr.py†L23-L37】 |
 
 ## J. Roadmap to a staging-ready MVP
 - P0 checklist (blocking):
-  - Enforce nonce/replay defense on PSP webhooks (cache event_id per timestamp window) and require at least one configured secret in non-dev environments.【F:app/services/psp_webhooks.py†L58-L100】
-  - Harden AI/OCR privacy: strict allowlist/masking before OpenAI calls, plus metrics and timeout/rate-limit guards.【F:app/services/ai_proof_advisor.py†L207-L220】【F:app/config.py†L54-L67】
-  - Normalize OCR monetary fields once and persist to typed columns before AI context; validate currency/Decimal parsing with unit tests.【F:app/services/proofs.py†L137-L146】【F:app/services/invoice_ocr.py†L47-L99】
-  - Expand AuditLog to AI/OCR invocations, escrow reads, and payment execution paths for full lifecycle forensics.【F:app/services/proofs.py†L220-L310】
-  - Add DB connectivity/alembic head check to `/health`; report scheduler lock age/expiry and stale detection.【F:app/routers/health.py†L55-L71】【F:app/services/scheduler_lock.py†L34-L154】
+  - Enforce mandatory PSP webhook secrets in non-dev, shrink timestamp drift, and add nonce cache/metrics to complement event_id uniqueness for replay defense.【F:app/routers/psp.py†L29-L48】【F:app/services/psp_webhooks.py†L68-L132】
+  - Harden AI masking: default redaction for unknown keys, expand tests for PII patterns, and surface dropped keys for tuning before OpenAI calls.【F:app/services/ai_proof_advisor.py†L215-L236】【F:app/utils/masking.py†L112-L169】
+  - Elevate monetary normalization: validate/flag invalid currency/amount inputs instead of silently coercing to None; audit normalization failures.【F:app/services/invoice_ocr.py†L102-L129】
+  - Add AuditLog entries for AI/OCR execution and successful payment settlements to complete lifecycle forensics.【F:app/services/proofs.py†L86-L219】【F:app/services/psp_webhooks.py†L138-L205】
+  - Strengthen lifecycle/health: remove global settings cache export, ensure config refresh, and add metrics/alerts for scheduler lock staleness and DB health.【F:app/config.py†L96-L132】【F:app/services/scheduler_lock.py†L18-L154】【F:app/routers/health.py†L49-L106】
 - P1 checklist (pre-pilot):
-  - Structured logging/metrics for PSP failures, AI timeouts, OCR outcomes; alert on webhook signature failure rates.【F:app/services/psp_webhooks.py†L52-L187】
-  - Pagination and listing endpoints for users/proofs/transactions; add search filters for alerts/logs.
-  - Stronger validation on geofence/doc fields and mandate/proof requirements; document data retention and privacy posture.
+  - Add metrics/tracing for AI/OCR/PSP outcomes and webhook failure rates; dynamic Alembic head detection instead of hardcoded revision.
+  - Pagination/search for user/proof/transaction lists; stricter validators on geofence/doc fields.
+  - Background or async AI/OCR execution with timeouts to reduce request latency.
 - P2 checklist (comfort/scalability):
-  - Circuit breakers/caching for external AI/OCR; background retries for transient PSP issues.
-  - Config hot-reload metrics and correlation IDs for tracing.
+  - Circuit breakers and retries for external providers; correlation IDs in logs; configurable scheduler lock names per environment.
+  - Documentation of data retention/privacy posture for AI/OCR payloads.
 
-- **Verdict: NO-GO for staging with 10 real users** until P0 items are completed and validated via targeted tests and dry-run webhooks.
+- **Verdict: NO-GO for staging with 10 real users** until P0 items (PSP secret enforcement/nonce cache, AI masking/validation, monetary normalization visibility, and full audit coverage) are addressed and validated by targeted tests.
 
 ## K. Verification evidence
-- Alembic (conceptual): `alembic current/heads/history --verbose` would confirm head alignment and presence of scheduler lock and proof AI/OCR migrations (not executed; inferred from migration files).【F:alembic/versions/4e1bd5489e1c_add_owner_and_expires_to_scheduler_locks.py†L1-L34】
-- Tests (conceptual): `pytest -q` would exercise health fingerprints, PSP signature handling, AI privacy, OCR enrichment, scheduler locking, escrow/proof/payment flows, and transaction audits (not executed; inferred from test suite layout).【F:tests/test_health.py†L4-L16】【F:tests/test_ai_privacy.py†L1-L160】【F:tests/test_scheduler_lock.py†L1-L120】
-- Code anchors: Proof lifecycle and AI/OCR integration in `app/services/proofs.py`; AI prompt/masking in `app/services/ai_proof_advisor.py`; OCR normalization in `app/services/invoice_ocr.py`; backend checks in `app/services/document_checks.py`; PSP HMAC verification in `app/services/psp_webhooks.py`; runtime config and `/health` telemetry in `app/config.py` and `app/routers/health.py`; scheduler lock resilience in `app/services/scheduler_lock.py`.【F:app/services/proofs.py†L97-L219】【F:app/services/ai_proof_advisor.py†L1-L220】【F:app/services/invoice_ocr.py†L17-L134】【F:app/services/document_checks.py†L36-L170】【F:app/services/psp_webhooks.py†L27-L187】【F:app/routers/health.py†L55-L71】【F:app/services/scheduler_lock.py†L34-L154】
+- Migrations (conceptual): `alembic current/heads/history --verbose` would confirm head `4e1bd5489e1c` with scheduler lock owner/expiry and presence of PSP webhook events/proof AI fields from initial schema (not executed; inferred from files).【F:alembic/versions/4e1bd5489e1c_add_owner_and_expires_to_scheduler_locks.py†L1-L31】【F:alembic/versions/baa4932d9a29_0001_init_schema.py†L31-L46】
+- Tests (conceptual): `pytest -q` would exercise health telemetry, AI privacy, OCR normalization, PSP signature/replay handling, scheduler lock behavior, escrow/proof/payment flows, and transaction audits based on test suite layout (not executed in this audit).
+- Code anchors: Proof lifecycle, AI/OCR integration, masking, normalization, PSP verification, and health telemetry referenced throughout this report.【F:app/services/proofs.py†L86-L219】【F:app/services/ai_proof_advisor.py†L215-L292】【F:app/utils/masking.py†L112-L169】【F:app/services/invoice_ocr.py†L102-L163】【F:app/services/psp_webhooks.py†L68-L205】【F:app/routers/health.py†L20-L106】【F:app/services/scheduler_lock.py†L18-L154】
