@@ -112,6 +112,11 @@ def submit_proof(
             ),
         )
 
+    if invoice_total_amount is not None and "invoice_total_amount" not in metadata_payload:
+        metadata_payload["invoice_total_amount"] = invoice_total_amount
+    if invoice_currency is not None and "invoice_currency" not in metadata_payload:
+        metadata_payload["invoice_currency"] = invoice_currency
+
     metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
     review_reason: str | None = None
     auto_approve = False

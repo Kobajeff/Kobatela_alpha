@@ -78,3 +78,23 @@ def test_submit_proof_accepts_valid_invoice_metadata(db_session):
 
     assert proof.invoice_total_amount == Decimal("150.50")
     assert proof.invoice_currency == "EUR"
+
+
+def test_submit_proof_normalizes_invoice_aliases(db_session):
+    escrow, milestone = _setup_pdf_escrow(db_session)
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://example.com/invoice-alias.pdf",
+        sha256="sha256-alias",
+        metadata={"total": "200.00", "currency": "usd"},
+    )
+
+    proof = proofs_service.submit_proof(db_session, payload, actor="tester")
+
+    assert proof.invoice_total_amount == Decimal("200.00")
+    assert proof.invoice_currency == "USD"
+    assert proof.metadata_["invoice_total_amount"] == "200.00"
+    assert proof.metadata_["invoice_currency"] == "USD"
