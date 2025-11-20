@@ -19,6 +19,8 @@ async def test_healthcheck(client):
     assert isinstance(payload.get("db_ok"), bool)
     assert isinstance(payload.get("migrations_ok"), bool)
     assert "scheduler_lock" in payload
+    assert payload.get("ai_metrics", {}).keys() >= {"calls", "errors"}
+    assert payload.get("ocr_metrics", {}).keys() >= {"calls", "errors"}
 
 
 @pytest.mark.anyio("asyncio")
