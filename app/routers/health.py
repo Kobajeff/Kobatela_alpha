@@ -48,15 +48,17 @@ def _secret_status(primary: str | None, secondary: str | None) -> str:
     return "missing"
 
 
-def _db_status() -> tuple[bool, str]:
+def _db_status() -> str:
+    """Return 'ok' if the DB is reachable, 'error' otherwise."""
+
     try:
         engine = get_engine()
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return True, "ok"
+        return "ok"
     except Exception:  # noqa: BLE001
         logger.exception("DB health check failed")
-        return False, "error"
+        return "error"
 
 
 def _expected_migration_head() -> str | None:
@@ -106,12 +108,14 @@ def healthcheck() -> dict[str, object]:
     settings = get_settings()
     primary_secret = settings.psp_webhook_secret
     secondary_secret = settings.psp_webhook_secret_next
-    db_ok, db_status = _db_status()
+    db_status = _db_status()
+    db_ok = db_status == "ok"
     if db_ok:
         migration_ok, migration_status = _migrations_status()
     else:
         migration_ok, migration_status = False, "unknown"
     degraded = not (db_ok and migration_ok)
+    ai_stats = get_ai_stats()
     return {
         "status": "degraded" if degraded else "ok",
         "psp_webhook_configured": bool(primary_secret or secondary_secret),
@@ -119,7 +123,8 @@ def healthcheck() -> dict[str, object]:
         "psp_webhook_secret_fingerprints": _psp_secret_fingerprints(settings),
         "ocr_enabled": bool(settings.INVOICE_OCR_ENABLED),
         "ai_proof_enabled": ai_enabled(),
-        "ai_metrics": get_ai_stats(),
+        "ai_metrics": ai_stats,
+        "ai_stats": ai_stats,
         "ocr_metrics": get_ocr_stats(),
         "scheduler_config_enabled": bool(settings.SCHEDULER_ENABLED),
         "scheduler_running": is_scheduler_active(),
