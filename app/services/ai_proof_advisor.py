@@ -15,6 +15,14 @@ from app.config import get_settings
 from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
 from app.utils.masking import mask_metadata_for_ai
 
+# Simple in-memory circuit breaker + metrics for AI Proof Advisor
+_AI_FAILURE_COUNT: int = 0
+_AI_FAILURE_THRESHOLD: int = 5
+_AI_CIRCUIT_OPEN: bool = False
+
+_AI_CALLS: int = 0
+_AI_ERRORS: int = 0
+
 try:
     from openai import (  # type: ignore[import-not-found]
         APITimeoutError,
@@ -30,44 +38,52 @@ except Exception:  # noqa: BLE001
 
 logger = logging.getLogger(__name__)
 
-_AI_FAILURES = 0
-_AI_FAILURE_THRESHOLD = 5
-_AI_CIRCUIT_OPEN = False
-_AI_CALLS_TOTAL = 0
-_AI_ERRORS_TOTAL = 0
 
-
-def _should_skip_ai() -> bool:
-    return _AI_CIRCUIT_OPEN
-
-
-def _record_ai_failure():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN
-    _record_ai_error()
-    _AI_FAILURES += 1
-    if _AI_FAILURES >= _AI_FAILURE_THRESHOLD:
-        _AI_CIRCUIT_OPEN = True
-
-
-def _record_ai_success():
-    global _AI_FAILURES, _AI_CIRCUIT_OPEN, _AI_CALLS_TOTAL
-    _AI_CALLS_TOTAL += 1
-    _AI_FAILURES = 0
+def _record_ai_success() -> None:
+    global _AI_FAILURE_COUNT, _AI_CIRCUIT_OPEN
+    _AI_FAILURE_COUNT = 0
     _AI_CIRCUIT_OPEN = False
 
 
-def _record_ai_error():
-    global _AI_CALLS_TOTAL, _AI_ERRORS_TOTAL
-    _AI_CALLS_TOTAL += 1
-    _AI_ERRORS_TOTAL += 1
+def _record_ai_failure() -> None:
+    global _AI_FAILURE_COUNT, _AI_CIRCUIT_OPEN, _AI_ERRORS
+    _AI_FAILURE_COUNT += 1
+    _AI_ERRORS += 1
+    if _AI_FAILURE_COUNT >= _AI_FAILURE_THRESHOLD:
+        _AI_CIRCUIT_OPEN = True
 
 
-def get_ai_stats() -> Dict[str, int]:
-    """Return basic runtime stats for AI Proof Advisor usage."""
+def _is_circuit_open() -> bool:
+    return _AI_CIRCUIT_OPEN
+
+
+def _fallback_ai_result(reason: str) -> dict[str, Any]:
+    """
+    Fallback safe result when AI is unavailable or circuit is open.
+    """
 
     return {
-        "calls": _AI_CALLS_TOTAL,
-        "errors": _AI_ERRORS_TOTAL,
+        "risk_level": "warning",
+        "score": 0.5,
+        "flags": ["ai_unavailable", reason],
+        "explanation": (
+            "L'analyse automatique de la preuve n'a pas pu être réalisée "
+            "en raison d'une indisponibilité temporaire du service d'IA "
+            f"({reason}). Merci de vérifier cette preuve manuellement."
+        ),
+    }
+
+
+def get_ai_stats() -> dict[str, int]:
+    """
+    Expose basic counters for health/observability.
+    """
+
+    return {
+        "calls": _AI_CALLS,
+        "errors": _AI_ERRORS,
+        "failure_count": _AI_FAILURE_COUNT,
+        "circuit_open": int(_AI_CIRCUIT_OPEN),
     }
 
 # --------------------------------------------------
@@ -290,22 +306,97 @@ def _sanitize_context(context: dict) -> dict:
 # --------------------------------------------------
 # 3️⃣ Fonction principale : appel OpenAI
 # --------------------------------------------------
-def _fallback_response(*, flags: list[str], explanation: str, score: float = 0.5) -> Dict[str, Any]:
-    return {
-        "risk_level": "warning",
-        "score": score,
-        "flags": ["ai_unavailable", *flags],
-        "explanation": explanation,
-    }
+def _call_ai_proof_once(
+    client,
+    model: str,
+    system_prompt: str,
+    sanitized_context: dict[str, Any],
+    timeout_seconds: int,
+    proof_storage_url: str | None = None,
+) -> dict[str, Any]:
+    """
+    Single low-level call to the AI provider.
+
+    This function assumes:
+    - client is already configured OpenAI client (or equivalent),
+    - sanitized_context has already been filtered for privacy.
+    """
+
+    user_content = build_ai_user_content(sanitized_context)
+
+    messages: List[Dict[str, Any]] = []
+    messages.append(
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": system_prompt,
+                }
+            ],
+        }
+    )
+
+    user_content_parts: List[Dict[str, Any]] = [
+        {
+            "type": "input_text",
+            "text": user_content,
+        }
+    ]
+
+    if proof_storage_url:
+        user_content_parts.append(
+            {
+                "type": "input_image",
+                "image_url": proof_storage_url,
+            }
+        )
+
+    messages.append(
+        {
+            "role": "user",
+            "content": user_content_parts,
+        }
+    )
+
+    resp = client.responses.create(
+        model=model,
+        input=messages,
+        timeout=timeout_seconds,
+    )
+
+    raw_text = getattr(resp, "output_text", None)
+    if not raw_text:
+        try:
+            output_chunks = getattr(resp, "output", []) or []
+            parts: List[str] = []
+            for chunk in output_chunks:
+                for content_item in getattr(chunk, "content", []) or []:
+                    if getattr(content_item, "type", None) == "output_text":
+                        parts.append(getattr(content_item, "text", ""))
+            raw_text = "".join(parts)
+        except Exception:  # noqa: BLE001
+            raw_text = None
+
+    if not raw_text:
+        raise ValueError("AI Proof Advisor did not return any text output")
+
+    raw_data = json.loads(raw_text)
+    return _normalize_ai_result(raw_data)
 
 
 def call_ai_proof_advisor(
     *,
-    model: str = "gpt-5.1-mini",
+    model: str | None = "gpt-5.1-mini",
     context: Dict[str, Any],
     proof_storage_url: Optional[str] = None,
+    client: Any | None = None,
+    timeout_seconds: int | None = None,
+    system_prompt: str | None = None,
 ) -> Dict[str, Any]:
-    """Call the Kobatela AI Proof Advisor."""
+    """Call the Kobatela AI Proof Advisor with resilience helpers."""
+
+    global _AI_CALLS, _AI_ERRORS
 
     start = time.monotonic()
     status = "success"
@@ -313,17 +404,15 @@ def call_ai_proof_advisor(
     settings = get_settings()
 
     try:
-        if _should_skip_ai():
+        if _is_circuit_open():
             status = "circuit_breaker_open"
             outcome_reason = "circuit_breaker_open"
             logger.warning("AI circuit breaker open; skipping advisory call.")
-            _record_ai_error()
-            return {
-                "risk_level": "warning",
-                "score": 0.5,
-                "flags": ["ai_unavailable", "circuit_breaker_open"],
-                "explanation": "AI circuit breaker open; skipping advisory.",
-            }
+            return _fallback_ai_result("circuit_breaker_open")
+
+        _AI_CALLS += 1
+
+        sanitized_context = _sanitize_context(context)
 
         if not ai_enabled():
             status = "disabled"
@@ -331,28 +420,16 @@ def call_ai_proof_advisor(
             logger.warning(
                 "AI Proof Advisor requested while feature is disabled; returning fallback result."
             )
-            _record_ai_error()
-            return _fallback_response(
-                flags=["ai_disabled"],
-                explanation=(
-                    "L'analyse automatique n'est pas activée pour cet environnement. "
-                    "Merci d'effectuer une revue manuelle."
-                ),
-            )
+            _AI_ERRORS += 1
+            return _fallback_ai_result("ai_disabled")
 
         api_key = settings.OPENAI_API_KEY
         if not api_key:
             status = "missing_api_key"
             outcome_reason = "missing_api_key"
             logger.warning("OPENAI_API_KEY is not set; returning fallback AI result.")
-            _record_ai_error()
-            return _fallback_response(
-                flags=["missing_api_key"],
-                explanation=(
-                    "L'analyse automatique n'a pas pu être effectuée car la clé API n'est pas configurée. "
-                    "Une revue manuelle est recommandée."
-                ),
-            )
+            _AI_ERRORS += 1
+            return _fallback_ai_result("missing_api_key")
 
         # Apply strict privacy sanitization
         sanitized_context = _sanitize_context(context)
@@ -361,135 +438,35 @@ def call_ai_proof_advisor(
             status = "missing_sdk"
             outcome_reason = "missing_sdk"
             logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
-            _record_ai_error()
-            return _fallback_response(
-                flags=["missing_sdk"],
-                explanation=(
-                    "L'analyse automatique n'a pas pu être effectuée car le SDK OpenAI n'est pas disponible. "
-                    "Merci de vérifier cette preuve manuellement."
-                ),
-            )
+            _AI_ERRORS += 1
+            return _fallback_ai_result("missing_sdk")
 
-        client = OpenAI(api_key=api_key)
+        ai_client = client or OpenAI(api_key=api_key)
+        model_to_use = model or ai_model()
+        timeout_to_use = timeout_seconds or ai_timeout_seconds()
+        system_prompt_to_use = system_prompt or AI_PROOF_ADVISOR_CORE_PROMPT
 
-        messages: List[Dict[str, Any]] = []
-        messages.append(
-            {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": AI_PROOF_ADVISOR_CORE_PROMPT,
-                    }
-                ],
-            }
-        )
-
-        user_content_parts: List[Dict[str, Any]] = [
-            {
-                "type": "input_text",
-                "text": user_content,
-            }
-        ]
-
-        if proof_storage_url:
-            user_content_parts.append(
-                {
-                    "type": "input_image",
-                    "image_url": proof_storage_url,
-                }
-            )
-
-        messages.append(
-            {
-                "role": "user",
-                "content": user_content_parts,
-            }
-        )
-
-        resp = client.responses.create(
-            model=model or ai_model(),
-            input=messages,
-            timeout=ai_timeout_seconds(),
-        )
-
-        raw_text = getattr(resp, "output_text", None)
-        if not raw_text:
+        last_exc: Exception | None = None
+        for _attempt in range(2):
             try:
-                output_chunks = getattr(resp, "output", []) or []
-                parts: List[str] = []
-                for chunk in output_chunks:
-                    for content_item in getattr(chunk, "content", []) or []:
-                        if getattr(content_item, "type", None) == "output_text":
-                            parts.append(getattr(content_item, "text", ""))
-                raw_text = "".join(parts)
-            except Exception:  # noqa: BLE001
-                raw_text = None
-
-        if not raw_text:
-            raise ValueError("AI Proof Advisor did not return any text output")
-
-        raw_data = json.loads(raw_text)
-        result = _normalize_ai_result(raw_data)
-        _record_ai_success()
-        return result
-
-    except Exception as exc:  # noqa: BLE001
-        if RateLimitError and isinstance(exc, RateLimitError):
-            status = "rate_limited"
-            outcome_reason = "rate_limited"
-            logger.warning("AI proof advisor rate limited", extra={"error": str(exc)})
-            _record_ai_failure()
-            return _fallback_response(
-                flags=["rate_limited_or_timeout"],
-                score=0.4,
-                explanation=(
-                    "L'analyse automatique a échoué en raison d'une limite de requêtes ou d'un délai dépassé. "
-                    "Une revue manuelle est recommandée."
-                ),
-            )
-        if APITimeoutError and isinstance(exc, APITimeoutError):
-            status = "timeout"
-            outcome_reason = "timeout"
-            logger.warning("AI proof advisor timeout", extra={"error": str(exc)})
-            _record_ai_failure()
-            return _fallback_response(
-                flags=["rate_limited_or_timeout"],
-                score=0.4,
-                explanation=(
-                    "L'analyse automatique a dépassé le délai autorisé. Merci de vérifier cette preuve manuellement."
-                ),
-            )
-        if APIError and isinstance(exc, APIError):
-            status = "api_error"
-            outcome_reason = "api_error"
-            logger.exception("AI proof advisor API error: %s", exc)
-            _record_ai_failure()
-            return _fallback_response(
-                flags=["api_error"],
-                score=0.4,
-                explanation=(
-                    "L'analyse automatique n'a pas pu être effectuée en raison d'une erreur du fournisseur d'IA. "
-                    "Merci de procéder à une revue manuelle."
-                ),
-            )
+                result = _call_ai_proof_once(
+                    client=ai_client,
+                    model=model_to_use,
+                    system_prompt=system_prompt_to_use,
+                    sanitized_context=sanitized_context,
+                    timeout_seconds=timeout_to_use,
+                    proof_storage_url=proof_storage_url,
+                )
+                _record_ai_success()
+                return result
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                _record_ai_failure()
 
         status = "error"
-        outcome_reason = "exception_during_call"
-        logger.exception("AI proof advisor call failed: %s", exc)
-        logger.warning(
-            "AI proof advisor fallback response emitted",
-            extra={"reason": "exception_during_call"},
-        )
-        _record_ai_failure()
-        return _fallback_response(
-            flags=["exception_during_call"],
-            score=0.4,
-            explanation=(
-                "L'analyse automatique de la preuve n'a pas pu être réalisée en raison d'une erreur technique. "
-                "Merci de vérifier cette preuve manuellement."
-            ),
-        )
+        outcome_reason = "retries_exhausted"
+        logger.exception("AI Proof Advisor failed after retries: %s", last_exc)
+        return _fallback_ai_result("retries_exhausted")
     finally:
         duration = time.monotonic() - start
         logger.info(
