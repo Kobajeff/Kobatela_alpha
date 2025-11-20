@@ -112,9 +112,22 @@ def submit_proof(
             ),
         )
 
-    if invoice_total_amount is not None and "invoice_total_amount" not in metadata_payload:
+    amount_alias_supplied = any(
+        key in metadata_payload for key in ("total", "total_amount")
+    )
+    currency_alias_supplied = "currency" in metadata_payload
+
+    if (
+        invoice_total_amount is not None
+        and "invoice_total_amount" not in metadata_payload
+        and amount_alias_supplied
+    ):
         metadata_payload["invoice_total_amount"] = invoice_total_amount
-    if invoice_currency is not None and "invoice_currency" not in metadata_payload:
+    if (
+        invoice_currency is not None
+        and "invoice_currency" not in metadata_payload
+        and currency_alias_supplied
+    ):
         metadata_payload["invoice_currency"] = invoice_currency
 
     metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
