@@ -116,37 +116,37 @@ AI_ALLOWED_METADATA_KEYS = {
     "invoice_currency",
     "invoice_number",
     "invoice_date",
-    "supplier_name",
-    "beneficiary_name",
     "beneficiary_city",
     "beneficiary_country",
     "supplier_city",
     "supplier_country",
-    "iban_last4",
-    "iban_masked",
     "gps_lat",
     "gps_lng",
     "gps_accuracy_m",
     "file_type",
+    "file_mime_type",
+    "file_pages",
     "status",
     "ocr_status",
     "ocr_provider",
-    "file_mime_type",
-    "file_pages",
-    "exif_timestamp",
-    "source",
 }
 
 SENSITIVE_PATTERNS = (
     "iban",
     "account",
+    "acct",
     "email",
+    "mail",
     "phone",
     "tel",
-    "ssn",
-    "nif",
-    "id_number",
     "address",
+    "addr",
+    "ssn",
+    "nin",
+    "id_number",
+    "passport",
+    "nif",
+    "niss",
 )
 
 AI_MASK_PLACEHOLDER = "***redacted***"
@@ -163,12 +163,15 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     for key, value in metadata.items():
         key_lower = key.lower()
 
-        if key_lower in AI_ALLOWED_METADATA_KEYS:
-            cleaned[key] = value
-            continue
-
         if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
             cleaned[key] = AI_MASK_PLACEHOLDER
+            continue
+
+        if key_lower in AI_ALLOWED_METADATA_KEYS:
+            if key_lower == "invoice_currency" and isinstance(value, str):
+                cleaned[key] = value.upper()
+            else:
+                cleaned[key] = value
             continue
 
         dropped_keys.append(key)

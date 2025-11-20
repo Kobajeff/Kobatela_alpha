@@ -1,11 +1,10 @@
-from decimal import Decimal
-
 import pytest
 
 from decimal import Decimal
 
 from app.models import EscrowAgreement, EscrowStatus, Milestone, MilestoneStatus, Proof, User
 from app.services.ai_proof_advisor import _sanitize_context
+from app.utils.masking import AI_MASK_PLACEHOLDER, mask_metadata_for_ai
 from app.utils.time import utcnow
 
 
@@ -18,8 +17,8 @@ def test_sanitize_context_masks_sensitive_fields():
             "metadata": {
                 "iban_full": "FR761234567890",
                 "iban_last4": "7890",
-                "supplier_name": "Very Sensitive Supplier",
                 "email": "supplier@example.com",
+                "invoice_total_amount": 123.45,
             },
         },
     }
@@ -27,11 +26,33 @@ def test_sanitize_context_masks_sensitive_fields():
     sanitized = _sanitize_context(context)
 
     masked_meta = sanitized["document_context"].get("metadata") or {}
-    assert masked_meta["iban_full"] == "***redacted***"
-    assert masked_meta["email"] == "***redacted***"
-    assert masked_meta["supplier_name"] == "Very Sensitive Supplier"
+    assert masked_meta["iban_full"] == AI_MASK_PLACEHOLDER
+    assert masked_meta["email"] == AI_MASK_PLACEHOLDER
+    assert "supplier_name" not in masked_meta
+    assert masked_meta["iban_last4"] == AI_MASK_PLACEHOLDER
+    assert masked_meta["invoice_total_amount"] == 123.45
     assert sanitized["mandate_context"]["beneficiary_name"] == "***masked***"
     assert sanitized["backend_checks"]["iban_check"] is True
+
+
+def test_mask_metadata_for_ai_masks_sensitive_and_drops_unknown():
+    masked = mask_metadata_for_ai(
+        {
+            "iban_full": "BE68539007547034",
+            "email": "john@doe.com",
+            "invoice_total_amount": 123.45,
+            "invoice_currency": "eur",
+            "client_secret": "super-secret",
+            "beneficiary_address": "secret street",
+        }
+    )
+
+    assert masked["iban_full"] == AI_MASK_PLACEHOLDER
+    assert masked["email"] == AI_MASK_PLACEHOLDER
+    assert masked["invoice_total_amount"] == 123.45
+    assert masked["invoice_currency"] == "EUR"
+    assert "client_secret" not in masked
+    assert masked["beneficiary_address"] == AI_MASK_PLACEHOLDER
 
 
 def test_mask_metadata_for_ai_drops_unknown_keys():
@@ -50,7 +71,7 @@ def test_mask_metadata_for_ai_drops_unknown_keys():
     assert masked["iban_full"] == "***redacted***"
     assert masked["email"] == "***redacted***"
     assert masked["invoice_total_amount"] == 123.45
-    assert masked["invoice_currency"] == "eur"
+    assert masked["invoice_currency"] == "EUR"
     assert "client_secret" not in masked
 
 

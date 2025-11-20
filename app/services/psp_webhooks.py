@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import hashlib
-import hmac
 import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
@@ -38,12 +36,7 @@ def _current_secrets() -> tuple[str | None, str | None]:
     return settings.psp_webhook_secret, settings.psp_webhook_secret_next
 
 
-def _secrets_map() -> dict[str, str | None]:
-    primary, secondary = _current_secrets()
-    return {"primary": primary, "secondary": secondary}
-
-
-def _masked_secret_status(secrets_info: dict[str, str | None]) -> dict[str, str | None]:
+def _masked_secret_status(secrets_info: Mapping[str, str | None]) -> dict[str, str | None]:
     """Return deterministic markers instead of raw secrets for logging."""
 
     masked: dict[str, str | None] = {}
@@ -57,69 +50,144 @@ def _masked_secret_status(secrets_info: dict[str, str | None]) -> dict[str, str 
     return masked
 
 
-def _log_signature_failure(reason: str, *, secrets_info: dict[str, str | None]) -> None:
+def _get_header(headers: Mapping[str, str], key: str) -> str | None:
+    for h_key, value in headers.items():
+        if h_key.lower() == key.lower():
+            return value
+    return None
+
+
+def _compute_webhook_signature(secret: str, body: bytes, timestamp: str) -> str:
+    """Compute HMAC-SHA256 signature for the webhook payload."""
+
+    msg = f"{timestamp}.{body.decode('utf-8')}".encode("utf-8")
+    return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
+
+
+def verify_psp_webhook_signature(raw_body: bytes, headers: Mapping[str, str]) -> None:
+    """Validate PSP webhook signature and timestamp and raise on failure."""
+
+    settings = _current_settings()
+    provided_sig = _get_header(headers, "X-PSP-Signature")
+    ts = _get_header(headers, "X-PSP-Timestamp")
+
+    secrets = [s for s in (settings.psp_webhook_secret, settings.psp_webhook_secret_next) if s]
+    secrets_info = {
+        "primary": settings.psp_webhook_secret,
+        "secondary": settings.psp_webhook_secret_next,
+    }
+    if not secrets:
+        logger.error(
+            "PSP webhook secrets are not configured",
+            extra={"psp_secret_status": _masked_secret_status(secrets_info)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_response(
+                "WEBHOOK_SECRET_NOT_CONFIGURED",
+                "PSP webhook secrets are not configured.",
+            ),
+        )
+
+    if not provided_sig or not ts:
+        logger.warning(
+            "Missing PSP signature or timestamp",
+            extra={"psp_secret_status": _masked_secret_status(secrets_info)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response(
+                "WEBHOOK_SIGNATURE_MISSING",
+                "Signature or timestamp header missing.",
+            ),
+        )
+
+    ts_seconds: int | None = None
+    try:
+        ts_seconds = int(float(ts))
+    except (TypeError, ValueError):
+        try:
+            ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            ts_seconds = int(ts_dt.timestamp())
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Invalid PSP webhook timestamp format",
+                extra={"psp_secret_status": _masked_secret_status(secrets_info)},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=error_response(
+                    "WEBHOOK_TIMESTAMP_INVALID",
+                    "Invalid timestamp format.",
+                ),
+            )
+
+    now = int(time.time())
+    age = abs(now - ts_seconds)
+    if age > MAX_WEBHOOK_AGE_SECONDS:
+        logger.warning(
+            "PSP webhook timestamp outside allowed window",
+            extra={"psp_secret_status": _masked_secret_status(secrets_info), "age": age},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response(
+                "WEBHOOK_TIMESTAMP_OUT_OF_RANGE",
+                "Webhook timestamp is outside allowed window.",
+            ),
+        )
+
+    for secret in secrets:
+        expected = _compute_webhook_signature(secret, raw_body, ts)
+        if hmac.compare_digest(expected, provided_sig):
+            return
+
     logger.warning(
-        "PSP signature verification failed",
-        extra={"reason": reason, "psp_secret_status": _masked_secret_status(secrets_info)},
+        "PSP webhook signature mismatch",
+        extra={"psp_secret_status": _masked_secret_status(secrets_info)},
+    )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=error_response(
+            "WEBHOOK_SIGNATURE_INVALID",
+            "Invalid PSP webhook signature.",
+        ),
     )
 
 
-def _compute_signature(secret: str, *, body: bytes, timestamp: str) -> str:
-    message = f"{timestamp}.{body.decode('utf-8')}".encode()
-    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+def register_psp_event_or_raise_replay(db: Session, provider: str, event_id: str) -> None:
+    """Detect PSP webhook replay attempts using provider/event_id pairs."""
 
+    if not event_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "MISSING_EVENT_ID",
+                "PSP webhook event_id is missing.",
+            ),
+        )
 
-def verify_signature(
-    body_bytes: bytes,
-    signature: str | None,
-    timestamp: str | None,
-    *,
-    skew_seconds: int | None = None,
-) -> tuple[bool, str]:
-    """Validate webhook signatures with HMAC rotation and timestamp skew protection."""
-
-    secrets_info = _secrets_map()
-    secrets = [s for s in secrets_info.values() if s]
-    if not secrets:
-        _log_signature_failure("secret-missing", secrets_info=secrets_info)
-        return False, "secret-missing"
-    if not signature:
-        _log_signature_failure("signature-missing", secrets_info=secrets_info)
-        return False, "signature-missing"
-    if not timestamp:
-        _log_signature_failure("timestamp-missing", secrets_info=secrets_info)
-        return False, "timestamp-missing"
-
-    ts_value: float | None
-    try:
-        ts_value = float(timestamp)
-    except (TypeError, ValueError):
-        try:
-            ts_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-            ts_value = ts_dt.timestamp()
-        except Exception:  # noqa: BLE001
-            _log_signature_failure("timestamp-invalid", secrets_info=secrets_info)
-            return False, "timestamp-invalid"
-
-    settings = _current_settings()
-    drift = skew_seconds or settings.psp_webhook_max_drift_seconds or MAX_WEBHOOK_AGE_SECONDS
-    now = time.time()
-    if ts_value is None or abs(now - ts_value) > drift:
-        _log_signature_failure("timestamp-skew", secrets_info=secrets_info)
-        return False, "timestamp-out-of-range"
-
-    for secret in secrets:
-        digest = _compute_signature(secret, body=body_bytes, timestamp=timestamp)
-        if hmac.compare_digest(digest, signature):
-            return True, ""
-
-    _log_signature_failure("hmac-mismatch", secrets_info=secrets_info)
-    return False, "hmac-mismatch"
+    existing = (
+        db.query(PSPWebhookEvent)
+        .execution_options(populate_existing=True)
+        .filter(
+            PSPWebhookEvent.provider == provider,
+            PSPWebhookEvent.event_id == event_id,
+        )
+        .one_or_none()
+    )
+    if existing:
+        logger.warning("Replay detected for PSP webhook", extra={"event_id": event_id, "provider": provider})
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response("WEBHOOK_REPLAY", "Duplicate PSP webhook event detected."),
+        )
 
 
 def handle_event(
     db: Session,
     *,
+    provider: str,
     event_id: str,
     psp_ref: str | None,
     kind: str,
@@ -127,40 +195,35 @@ def handle_event(
 ) -> PSPWebhookEvent:
     """Persist and process a PSP webhook event in an idempotent manner."""
 
-    if not event_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=error_response("MISSING_EVENT_ID", "Webhook event_id is required."),
-        )
+    register_psp_event_or_raise_replay(db, provider, event_id)
 
-    db.expire_all()
-    existing = (
-        db.query(PSPWebhookEvent)
-        .execution_options(populate_existing=True)
-        .filter(PSPWebhookEvent.event_id == event_id)
-        .one_or_none()
+    event = PSPWebhookEvent(
+        provider=provider,
+        event_id=event_id,
+        psp_ref=psp_ref,
+        kind=kind,
+        raw_json=payload,
+        received_at=utcnow(),
     )
-    if existing:
-        logger.warning("Replay detected for PSP webhook", extra={"event_id": event_id})
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=error_response("PSP_WEBHOOK_REPLAY", "Duplicate webhook event."),
-        )
-
-    event = PSPWebhookEvent(event_id=event_id, psp_ref=psp_ref, kind=kind, raw_json=payload)
     try:
         db.add(event)
         db.flush()
     except IntegrityError:
         db.rollback()
-        logger.warning("Replay detected for PSP webhook", extra={"event_id": event_id})
+        logger.warning("Replay detected for PSP webhook", extra={"event_id": event_id, "provider": provider})
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=error_response("PSP_WEBHOOK_REPLAY", "Duplicate webhook event."),
+            detail=error_response("WEBHOOK_REPLAY", "Duplicate PSP webhook event detected."),
         )
 
     if kind in {"payment.settled", "payment_succeeded"}:
-        _mark_payment_settled(db, psp_ref=psp_ref)
+        _mark_payment_settled(
+            db,
+            psp_ref=psp_ref,
+            provider=provider,
+            event_id=event_id,
+            status=kind,
+        )
     elif kind in {"payment.failed", "payment_failed"}:
         _mark_payment_error(db, psp_ref=psp_ref)
 
@@ -168,10 +231,27 @@ def handle_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+    logger.info(
+        "PSP webhook processed",
+        extra={
+            "provider": provider,
+            "event_id": event_id,
+            "status": "success",
+            "psp_ref": psp_ref,
+            "kind": kind,
+        },
+    )
     return event
 
 
-def _mark_payment_settled(db: Session, *, psp_ref: str | None) -> None:
+def _mark_payment_settled(
+    db: Session,
+    *,
+    psp_ref: str | None,
+    provider: str,
+    event_id: str,
+    status: str,
+) -> None:
     """Mark a payment as settled if a PSP confirmation references it."""
 
     if not psp_ref:
@@ -190,8 +270,13 @@ def _mark_payment_settled(db: Session, *, psp_ref: str | None) -> None:
     finalize_payment_settlement(
         db,
         payment,
-        source="psp",
-        extra={"psp_ref": psp_ref},
+        source="psp_webhook",
+        extra={
+            "psp_ref": psp_ref,
+            "provider": provider,
+            "event_id": event_id,
+            "psp_status": status,
+        },
     )
     logger.info("Payment settled", extra={"payment_id": payment.id})
 
@@ -227,4 +312,4 @@ def _mark_payment_error(db: Session, *, psp_ref: str | None) -> None:
     logger.info("Payment marked as error", extra={"payment_id": payment.id})
 
 
-__all__ = ["handle_event", "verify_signature"]
+__all__ = ["handle_event", "verify_psp_webhook_signature", "register_psp_event_or_raise_replay"]

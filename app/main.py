@@ -55,27 +55,32 @@ def _configure_middlewares(fastapi_app: FastAPI) -> None:
 
         sentry_sdk.init(dsn=runtime_settings.SENTRY_DSN, traces_sample_rate=0.2)
 
+
+def _assert_psp_webhook_secrets(settings: Any) -> None:
+    """Fail-fast when PSP webhook secrets are missing in non-dev environments."""
+
+    secrets_configured = bool(settings.psp_webhook_secret or settings.psp_webhook_secret_next)
+    env_lower = settings.app_env.lower()
+    if env_lower != "dev" and not secrets_configured:
+        logger.error(
+            "PSP webhook secrets are missing; configure PSP_WEBHOOK_SECRET or PSP_WEBHOOK_SECRET_NEXT before startup.",
+            extra={"env": settings.app_env},
+        )
+        raise RuntimeError("Missing PSP webhook secrets in non-dev environment.")
+    if env_lower == "dev" and not secrets_configured:
+        logger.warning(
+            "PSP webhook secrets are not configured; allowed in dev only.",
+            extra={"env": settings.app_env},
+        )
+
+
 # -------- Lifespan (nouveau mécanisme) --------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     settings = _current_settings()
     logger.info("Application startup", extra={"env": settings.app_env})
-    secrets_configured = bool(settings.psp_webhook_secret or settings.psp_webhook_secret_next)
-    if settings.app_env.lower() != "dev":
-        if not secrets_configured:
-            logger.error(
-                "PSP webhook secrets are missing; configure PSP_WEBHOOK_SECRET or PSP_WEBHOOK_SECRET_NEXT before startup.",
-                extra={"env": settings.app_env},
-            )
-            raise RuntimeError(
-                "PSP webhook secrets missing: configure PSP_WEBHOOK_SECRET/PSP_WEBHOOK_SECRET_NEXT in the environment."
-            )
-    elif not secrets_configured:
-        logger.warning(
-            "PSP webhook secrets are not configured; allowed in dev only.",
-            extra={"env": settings.app_env},
-        )
+    _assert_psp_webhook_secrets(settings)
 
     if settings.psp_webhook_secret is None and settings.psp_webhook_secret_next:
         logger.warning(
