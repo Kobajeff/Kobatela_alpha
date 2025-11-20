@@ -17,7 +17,8 @@ class Proof(Base):
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     storage_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     sha256: Mapped[str] = mapped_column(String(128), nullable=False)
-    metadata_: Mapped[dict] = mapped_column("metadata", JSON, nullable=True)
+    # Use a non-reserved attribute name while persisting to the "metadata" column.
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
