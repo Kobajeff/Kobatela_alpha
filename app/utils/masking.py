@@ -150,7 +150,7 @@ SENSITIVE_PATTERNS = (
 )
 
 
-def mask_metadata_for_ai(metadata):
+def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     """
     Apply strict privacy rules before sending metadata to OpenAI.
 
@@ -158,7 +158,7 @@ def mask_metadata_for_ai(metadata):
     - Sensitive keys → replaced by placeholder (***redacted***).
     - Unknown keys → removed from context but tracked in _ai_redacted_keys.
     """
-    if not isinstance(metadata, dict):
+    if not isinstance(metadata, Mapping):
         return {}
 
     cleaned = {}
@@ -167,18 +167,18 @@ def mask_metadata_for_ai(metadata):
     for key, value in metadata.items():
         key_lower = key.lower()
 
-        # 1) Sensitive → mask
-        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
-            cleaned[key] = AI_MASK_PLACEHOLDER
-            redacted_keys.append(key)
-            continue
-
-        # 2) Allowed → keep
+        # 1) Allowed → keep
         if key_lower in AI_ALLOWED_METADATA_KEYS:
             if key_lower == "invoice_currency" and isinstance(value, str):
                 cleaned[key] = value.upper()
             else:
                 cleaned[key] = value
+            continue
+
+        # 2) Sensitive → mask
+        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
+            cleaned[key] = AI_MASK_PLACEHOLDER
+            redacted_keys.append(key)
             continue
 
         # 3) Unknown key → drop + log in special field

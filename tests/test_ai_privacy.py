@@ -1,6 +1,6 @@
 import pytest
 from app.services.ai_proof_advisor import _sanitize_context
-from app.utils.masking import AI_MASK_PLACEHOLDER
+from app.utils.masking import AI_MASK_PLACEHOLDER, mask_metadata_for_ai
 
 
 def test_ai_masks_sensitive_in_mandate():
@@ -95,3 +95,20 @@ def test_ai_preserves_backend_and_mandate_signals():
     assert cleaned["backend_checks"]["duplicate_hash"] == "abc123"
     assert cleaned["mandate_context"]["mandate_amount"] == 2500
     assert cleaned["mandate_context"]["mandate_currency"] == "EUR"
+def test_mask_metadata_for_ai_logs_redacted_keys():
+    metadata = {
+        "invoice_total_amount": 100,
+        "iban_full": "BE68539007547034",
+        "email": "john@doe.com",
+        "custom_field": "should_not_be_sent",
+    }
+
+    cleaned = mask_metadata_for_ai(metadata)
+
+    assert cleaned["invoice_total_amount"] == 100
+    assert cleaned["iban_full"] == AI_MASK_PLACEHOLDER
+
+    redacted = cleaned.get("_ai_redacted_keys") or []
+    assert "iban_full" in redacted
+    assert "email" in redacted
+    assert "custom_field" in redacted
