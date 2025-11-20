@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 from app.config import get_settings
 
@@ -97,6 +97,35 @@ def _normalize_invoice_ocr(raw: Dict[str, Any]) -> Dict[str, Any]:
                 normalized.setdefault("iban_full_masked", masked)
 
     return {k: v for k, v in normalized.items() if v is not None}
+
+
+def normalize_invoice_amount_and_currency(
+    metadata: Dict[str, Any],
+) -> Tuple[Optional[Decimal], Optional[str]]:
+    """Extract and normalize invoice total amount & currency from metadata.
+
+    - Accepts strings or numbers for amount.
+    - Normalizes to Decimal with 2 decimal places.
+    - Currency must be a 3-letter uppercase code, otherwise None.
+    """
+
+    raw_amount = metadata.get("invoice_total_amount") or metadata.get("total_amount")
+    raw_currency = metadata.get("invoice_currency") or metadata.get("currency")
+
+    amount_dec: Optional[Decimal] = None
+    if raw_amount is not None:
+        try:
+            amount_dec = Decimal(str(raw_amount)).quantize(Decimal("0.01"))
+        except (InvalidOperation, TypeError, ValueError):
+            amount_dec = None
+
+    currency_norm: Optional[str] = None
+    if isinstance(raw_currency, str):
+        code = raw_currency.strip().upper()
+        if len(code) == 3 and code.isalpha():
+            currency_norm = code
+
+    return amount_dec, currency_norm
 
 
 def enrich_metadata_with_invoice_ocr(

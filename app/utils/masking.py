@@ -109,28 +109,63 @@ def mask_proof_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]
     return _mask_mapping(metadata)
 
 
-INVOICE_AI_ALLOWED_FIELDS = {
+AI_ALLOWED_METADATA_KEYS = {
     "invoice_total_amount",
     "invoice_currency",
+    "invoice_number",
     "invoice_date",
     "supplier_name",
+    "beneficiary_name",
+    "beneficiary_city",
+    "beneficiary_country",
     "supplier_city",
     "supplier_country",
-    "line_items_summary",
+    "iban_last4",
+    "iban_masked",
+    "gps_lat",
+    "gps_lng",
+    "gps_accuracy_m",
+    "file_type",
+    "status",
+    "ocr_status",
+    "ocr_provider",
+    "file_mime_type",
+    "file_pages",
 }
+
+SENSITIVE_PATTERNS = (
+    "iban",
+    "account",
+    "email",
+    "phone",
+    "tel",
+    "ssn",
+    "nif",
+    "id_number",
+)
+
+AI_MASK_PLACEHOLDER = "***redacted***"
 
 
 def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return a strict subset of metadata fields allowed for AI usage."""
+    """Whitelist + redaction for AI privacy."""
 
     if not isinstance(metadata, Mapping):
         return {}
 
-    safe: dict[str, Any] = {}
-    for key in INVOICE_AI_ALLOWED_FIELDS:
-        if key in metadata:
-            safe[key] = metadata[key]
-    return safe
+    cleaned: dict[str, Any] = {}
+    for key, value in metadata.items():
+        key_lower = key.lower()
+
+        if key_lower in AI_ALLOWED_METADATA_KEYS:
+            cleaned[key] = value
+            continue
+
+        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
+            cleaned[key] = AI_MASK_PLACEHOLDER
+            continue
+
+    return cleaned
 
 
 __all__ = ["mask_proof_metadata", "mask_metadata_for_ai"]

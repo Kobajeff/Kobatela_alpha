@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import hashlib
-import hashlib
 import hmac
 import json
 import os
 from datetime import timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
@@ -92,7 +92,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
             "X-PSP-Ref": "psp-123",
         },
     )
-    assert repeat.status_code == 200
+    assert repeat.status_code == 409
     assert db_session.query(PSPWebhookEvent).count() == 1
 
 
@@ -167,3 +167,24 @@ async def test_psp_webhook_missing_secret(client):
         assert response.status_code == 503
     finally:
         settings.psp_webhook_secret = original_secret
+
+
+def test_psp_secrets_refresh_each_call(monkeypatch):
+    from app.services import psp_webhooks
+
+    first = SimpleNamespace(
+        psp_webhook_secret="alpha",
+        psp_webhook_secret_next=None,
+        psp_webhook_max_drift_seconds=300,
+    )
+    second = SimpleNamespace(
+        psp_webhook_secret="beta",
+        psp_webhook_secret_next="next-beta",
+        psp_webhook_max_drift_seconds=300,
+    )
+
+    monkeypatch.setattr(psp_webhooks, "get_settings", lambda: first)
+    assert psp_webhooks._current_secrets() == ("alpha", None)
+
+    monkeypatch.setattr(psp_webhooks, "get_settings", lambda: second)
+    assert psp_webhooks._current_secrets() == ("beta", "next-beta")

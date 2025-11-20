@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import hashlib
+import hmac
+import json
 import logging
-import time
+from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -15,6 +19,7 @@ from app.models.psp_webhook import PSPWebhookEvent
 from app.models.audit import AuditLog
 from app.services.payments import finalize_payment_settlement
 from app.utils.audit import sanitize_payload_for_audit
+from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -55,6 +60,11 @@ def _log_signature_failure(reason: str, *, secrets_info: dict[str, str | None]) 
     )
 
 
+def _compute_signature(secret: str, *, body: bytes, timestamp: str) -> str:
+    message = f"{timestamp}.{body.decode('utf-8')}".encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
 def verify_signature(
     body_bytes: bytes,
     signature: str | None,
@@ -76,22 +86,26 @@ def verify_signature(
         _log_signature_failure("timestamp-missing", secrets_info=secrets_info)
         return False, "timestamp-missing"
 
+    ts_value: float | None
     try:
-        sent_ts = float(timestamp)
+        ts_value = float(timestamp)
     except (TypeError, ValueError):
-        _log_signature_failure("timestamp-invalid", secrets_info=secrets_info)
-        return False, "timestamp-invalid"
+        try:
+            ts_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            ts_value = ts_dt.timestamp()
+        except Exception:  # noqa: BLE001
+            _log_signature_failure("timestamp-invalid", secrets_info=secrets_info)
+            return False, "timestamp-invalid"
 
     settings = _current_settings()
     drift = skew_seconds or settings.psp_webhook_max_drift_seconds or 300
-    now = time.time()
-    if abs(now - sent_ts) > drift:
+    now = datetime.now(timezone.utc).timestamp()
+    if ts_value is None or abs(now - ts_value) > drift:
         _log_signature_failure("timestamp-skew", secrets_info=secrets_info)
         return False, "timestamp-skew"
 
-    payload = timestamp.encode() + b"." + body_bytes
     for secret in secrets:
-        digest = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+        digest = _compute_signature(secret, body=body_bytes, timestamp=timestamp)
         if hmac.compare_digest(digest, signature):
             return True, ""
 
@@ -111,8 +125,11 @@ def handle_event(
 
     existing = db.query(PSPWebhookEvent).filter(PSPWebhookEvent.event_id == event_id).one_or_none()
     if existing:
-        logger.info("PSP webhook already processed", extra={"event_id": event_id})
-        return existing
+        logger.warning("Replay detected for PSP webhook", extra={"event_id": event_id})
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response("PSP_WEBHOOK_REPLAY", "Duplicate webhook event."),
+        )
 
     event = PSPWebhookEvent(event_id=event_id, psp_ref=psp_ref, kind=kind, raw_json=payload)
     db.add(event)
