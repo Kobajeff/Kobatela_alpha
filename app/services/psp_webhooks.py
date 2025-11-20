@@ -310,6 +310,7 @@ def _mark_payment_settled(
             "psp_ref": psp_ref,
             "provider": provider,
             "event_id": event_id,
+            "psp_event_id": event_id,
             "psp_status": status,
         },
     )

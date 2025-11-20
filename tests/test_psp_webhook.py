@@ -109,6 +109,8 @@ async def test_psp_webhook_settles_payment(client, db_session):
     assert audit is not None
     assert audit.data_json.get("provider") == "default"
     assert audit.data_json.get("event_id") == "evt-psp-1"
+    assert audit.data_json.get("psp_event_id") == "evt-psp-1"
+    assert audit.data_json.get("psp_status") == payload["type"]
 
     repeat = await client.post(
         "/psp/webhook",

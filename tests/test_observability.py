@@ -37,7 +37,7 @@ def test_ai_circuit_breaker_skips_when_open(monkeypatch):
     from app.services import ai_proof_advisor
 
     ai_proof_advisor._AI_CIRCUIT_OPEN = True
-    ai_proof_advisor._AI_FAILURES = 5
+    ai_proof_advisor._AI_FAILURE_COUNT = 5
 
     result = ai_proof_advisor.call_ai_proof_advisor(
         context={"document_context": {"metadata": {}}}, proof_storage_url=None
@@ -47,7 +47,7 @@ def test_ai_circuit_breaker_skips_when_open(monkeypatch):
     assert result["score"] == 0.5
 
     ai_proof_advisor._AI_CIRCUIT_OPEN = False
-    ai_proof_advisor._AI_FAILURES = 0
+    ai_proof_advisor._AI_FAILURE_COUNT = 0
 
 
 def test_ai_circuit_breaker_opens_after_failures(monkeypatch):
@@ -63,7 +63,7 @@ def test_ai_circuit_breaker_opens_after_failures(monkeypatch):
         def create(self, *_args, **_kwargs):
             raise ValueError("boom")
 
-    ai_proof_advisor._AI_FAILURES = 4
+    ai_proof_advisor._AI_FAILURE_COUNT = 4
     ai_proof_advisor._AI_CIRCUIT_OPEN = False
 
     monkeypatch.setattr(ai_proof_advisor, "get_settings", lambda: DummySettings())
@@ -77,17 +77,17 @@ def test_ai_circuit_breaker_opens_after_failures(monkeypatch):
     )
 
     assert ai_proof_advisor._AI_CIRCUIT_OPEN is True
-    assert "exception_during_call" in result.get("flags", [])
+    assert "retries_exhausted" in result.get("flags", [])
 
-    ai_proof_advisor._AI_FAILURES = 0
+    ai_proof_advisor._AI_FAILURE_COUNT = 0
     ai_proof_advisor._AI_CIRCUIT_OPEN = False
 
 
 def test_ai_metrics_track_calls_and_errors(monkeypatch):
     from app.services import ai_proof_advisor
 
-    ai_proof_advisor._AI_CALLS_TOTAL = 0
-    ai_proof_advisor._AI_ERRORS_TOTAL = 0
+    ai_proof_advisor._AI_CALLS = 0
+    ai_proof_advisor._AI_ERRORS = 0
 
     monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: False)
 
@@ -100,8 +100,8 @@ def test_ai_metrics_track_calls_and_errors(monkeypatch):
     assert stats["calls"] == 1
     assert stats["errors"] == 1
 
-    ai_proof_advisor._AI_CALLS_TOTAL = 0
-    ai_proof_advisor._AI_ERRORS_TOTAL = 0
+    ai_proof_advisor._AI_CALLS = 0
+    ai_proof_advisor._AI_ERRORS = 0
 
 
 def test_ai_metrics_success_does_not_increment_errors(monkeypatch):
@@ -127,9 +127,9 @@ def test_ai_metrics_success_does_not_increment_errors(monkeypatch):
         def create(self, *_args, **_kwargs):
             return DummyResponse()
 
-    ai_proof_advisor._AI_CALLS_TOTAL = 0
-    ai_proof_advisor._AI_ERRORS_TOTAL = 0
-    ai_proof_advisor._AI_FAILURES = 0
+    ai_proof_advisor._AI_CALLS = 0
+    ai_proof_advisor._AI_ERRORS = 0
+    ai_proof_advisor._AI_FAILURE_COUNT = 0
     ai_proof_advisor._AI_CIRCUIT_OPEN = False
 
     monkeypatch.setattr(ai_proof_advisor, "get_settings", lambda: DummySettings())

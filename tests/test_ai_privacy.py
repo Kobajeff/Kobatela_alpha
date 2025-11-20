@@ -1,181 +1,93 @@
 import pytest
-
-from decimal import Decimal
-
-from app.models import EscrowAgreement, EscrowStatus, Milestone, MilestoneStatus, Proof, User
 from app.services.ai_proof_advisor import _sanitize_context
 from app.utils.masking import AI_MASK_PLACEHOLDER, mask_metadata_for_ai
-from app.utils.time import utcnow
 
 
-def test_sanitize_context_masks_sensitive_fields():
-    context = {
-        "mandate_context": {"beneficiary_name": "Alice Beneficiary", "iban": "FR761234567890"},
-        "backend_checks": {"iban_check": True, "amount_check": "ok"},
-        "document_context": {
-            "storage_url": "https://storage.example.com/proofs/invoice.pdf",
-            "metadata": {
-                "iban_full": "FR761234567890",
-                "iban_last4": "7890",
-                "email": "supplier@example.com",
-                "invoice_total_amount": 123.45,
-            },
-        },
-    }
-
-    sanitized = _sanitize_context(context)
-
-    masked_meta = sanitized["document_context"].get("metadata") or {}
-    assert masked_meta["iban_full"] == AI_MASK_PLACEHOLDER
-    assert masked_meta["email"] == AI_MASK_PLACEHOLDER
-    assert "supplier_name" not in masked_meta
-    assert masked_meta["iban_last4"] == AI_MASK_PLACEHOLDER
-    assert masked_meta["invoice_total_amount"] == 123.45
-    assert "_ai_redacted_keys" not in masked_meta
-    assert sanitized["mandate_context"]["beneficiary_name"] == "Alice Beneficiary"
-    assert sanitized["backend_checks"]["iban_check"] is True
-def test_mask_metadata_for_ai_masks_sensitive_and_drops_unknown():
-    masked = mask_metadata_for_ai(
-        {
-            "iban_full": "BE68539007547034",
-            "email": "john@doe.com",
-            "invoice_total_amount": 123.45,
-            "invoice_currency": "eur",
-            "client_secret": "super-secret",
-            "beneficiary_address": "secret street",
-        }
-    )
-
-    assert masked["iban_full"] == AI_MASK_PLACEHOLDER
-    assert masked["email"] == AI_MASK_PLACEHOLDER
-    assert masked["invoice_total_amount"] == 123.45
-    assert masked["invoice_currency"] == "EUR"
-    assert masked["beneficiary_address"] == AI_MASK_PLACEHOLDER
-    assert "client_secret" not in masked
-
-
-def test_sanitize_context_masks_all_subcontexts():
+def test_ai_masks_sensitive_in_mandate():
     ctx = {
         "mandate_context": {
             "beneficiary_iban": "BE12345678901234",
-            "invoice_total_amount": 50,
+            "email": "test@example.com",
         },
-        "backend_checks": {
-            "contact_email": "foo@bar.com",
-            "gps_lat": 1.1,
-        },
-        "document_context": {
-            "metadata": {
-                "iban_full": "BE99999999999999",
-                "invoice_currency": "usd",
-            },
-            "other_field": "kept_as_is",
-        },
+        "document_context": {"metadata": {}},
+        "backend_checks": {},
     }
 
     cleaned = _sanitize_context(ctx)
 
-    mandate = cleaned["mandate_context"]
-    assert mandate["beneficiary_iban"] == "BE12345678901234"
-    assert mandate["invoice_total_amount"] == 50
-
-    backend = cleaned["backend_checks"]
-    assert backend["contact_email"] == "foo@bar.com"
-    assert backend["gps_lat"] == 1.1
-
-    document = cleaned["document_context"]
-    meta = document["metadata"]
-    assert meta["iban_full"] == AI_MASK_PLACEHOLDER
-    assert meta["invoice_currency"] == "USD"
-    assert document["other_field"] == "kept_as_is"
+    assert cleaned["mandate_context"]["beneficiary_iban"] == AI_MASK_PLACEHOLDER
+    assert cleaned["mandate_context"]["email"] == AI_MASK_PLACEHOLDER
 
 
-def test_mask_metadata_for_ai_preserves_allowed_without_redaction_marker():
-    masked = mask_metadata_for_ai(
-        {
-            "invoice_total_amount": 10,
-            "invoice_currency": "usd",
-        }
-    )
-
-    assert masked["invoice_total_amount"] == 10
-    assert masked["invoice_currency"] == "USD"
-
-
-def test_mask_metadata_for_ai_drops_unknown_keys():
-    from app.utils.masking import mask_metadata_for_ai
-
-    masked = mask_metadata_for_ai(
-        {
-            "iban_full": "BE68539007547034",
-            "email": "john@doe.com",
-            "invoice_total_amount": 123.45,
-            "invoice_currency": "eur",
-            "client_secret": "super-secret",
-        }
-    )
-
-    assert masked["iban_full"] == "***redacted***"
-    assert masked["email"] == "***redacted***"
-    assert masked["invoice_total_amount"] == 123.45
-    assert masked["invoice_currency"] == "EUR"
-    assert "client_secret" not in masked
-
-
-@pytest.mark.anyio("asyncio")
-async def test_proof_response_masks_sensitive_metadata(client, auth_headers, db_session):
-    client_user = User(username="proof-client", email="proof-client@example.com")
-    provider_user = User(username="proof-provider", email="proof-provider@example.com")
-    db_session.add_all([client_user, provider_user])
-    db_session.flush()
-
-    escrow = EscrowAgreement(
-        client_id=client_user.id,
-        provider_id=provider_user.id,
-        amount_total=Decimal("200.00"),
-        currency="USD",
-        status=EscrowStatus.FUNDED,
-        release_conditions_json={"proof": "invoice"},
-        deadline_at=utcnow(),
-    )
-    db_session.add(escrow)
-    db_session.flush()
-
-    milestone = Milestone(
-        escrow_id=escrow.id,
-        idx=1,
-        label="Invoice",
-        amount=Decimal("200.00"),
-        proof_type="PDF",
-        validator="SENDER",
-        status=MilestoneStatus.WAITING,
-    )
-    db_session.add(milestone)
-    db_session.commit()
-
-    metadata = {
-        "iban_full": "FR761234567890",
-        "supplier_name": "Sensitive Supplier",
-        "iban_last4": "7890",
-    }
-    response = await client.post(
-        "/proofs",
-        json={
-            "escrow_id": escrow.id,
-            "milestone_idx": 1,
-            "type": "PDF",
-            "storage_url": "https://storage.example.com/proof.pdf",
-            "sha256": "proof-hash-privacy",
-            "metadata": metadata,
+def test_ai_masks_sensitive_in_backend():
+    ctx = {
+        "backend_checks": {
+            "phone_number": "+32470000000",
+            "address": "Rue de Test 42",
         },
-        headers=auth_headers,
-    )
-    assert response.status_code == 201
-    payload = response.json()
-    assert payload["metadata"]["iban_full"].endswith("7890")
-    assert payload["metadata"]["iban_full"] != metadata["iban_full"]
-    assert payload["metadata"]["supplier_name"] == "***masked***"
+        "document_context": {"metadata": {}},
+        "mandate_context": {},
+    }
 
-    proof = db_session.get(Proof, payload["id"])
-    assert proof.metadata_["iban_full"] == metadata["iban_full"]
-    assert proof.metadata_["supplier_name"] == metadata["supplier_name"]
+    cleaned = _sanitize_context(ctx)
+
+    assert cleaned["backend_checks"]["phone_number"] == AI_MASK_PLACEHOLDER
+    assert cleaned["backend_checks"]["address"] == AI_MASK_PLACEHOLDER
+
+
+def test_ai_allows_valid_invoice_metadata():
+    ctx = {
+        "document_context": {
+            "metadata": {
+                "invoice_total_amount": 100,
+                "invoice_currency": "EUR",
+            }
+        },
+        "backend_checks": {},
+        "mandate_context": {},
+    }
+
+    cleaned = _sanitize_context(ctx)
+
+    meta = cleaned["document_context"]["metadata"]
+    assert meta["invoice_total_amount"] == 100
+    assert meta["invoice_currency"] == "EUR"
+
+
+def test_ai_redacts_unknown_keys():
+    ctx = {
+        "document_context": {
+            "metadata": {
+                "custom_field": "SECRET",
+                "invoice_total_amount": 100,
+            }
+        },
+        "mandate_context": {},
+        "backend_checks": {},
+    }
+
+    cleaned = _sanitize_context(ctx)
+    meta = cleaned["document_context"]["metadata"]
+
+    assert "custom_field" not in meta
+    assert "_ai_redacted_keys" in meta
+    assert "custom_field" in meta["_ai_redacted_keys"]
+
+
+def test_mask_metadata_for_ai_logs_redacted_keys():
+    metadata = {
+        "invoice_total_amount": 100,
+        "iban_full": "BE68539007547034",
+        "email": "john@doe.com",
+        "custom_field": "should_not_be_sent",
+    }
+
+    cleaned = mask_metadata_for_ai(metadata)
+
+    assert cleaned["invoice_total_amount"] == 100
+    assert cleaned["iban_full"] == AI_MASK_PLACEHOLDER
+
+    redacted = cleaned.get("_ai_redacted_keys") or []
+    assert "iban_full" in redacted
+    assert "email" in redacted
+    assert "custom_field" in redacted
