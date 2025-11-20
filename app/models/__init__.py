@@ -6,7 +6,7 @@ from .api_key import ApiKey, ApiScope
 from .audit import AuditLog
 from .base import Base
 from .certified import CertifiedAccount, CertificationLevel
-from .escrow import EscrowAgreement, EscrowDeposit, EscrowEvent, EscrowStatus
+from .escrow import EscrowAgreement, EscrowDeposit, EscrowDomain, EscrowEvent, EscrowStatus
 from .milestone import Milestone, MilestoneStatus
 from .payment import Payment, PaymentStatus
 from .proof import Proof
@@ -29,6 +29,7 @@ __all__ = [
     "CertificationLevel",
     "EscrowAgreement",
     "EscrowDeposit",
+    "EscrowDomain",
     "EscrowEvent",
     "EscrowStatus",
     "Milestone",
