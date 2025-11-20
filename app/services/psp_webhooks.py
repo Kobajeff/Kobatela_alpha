@@ -58,8 +58,9 @@ def _validate_psp_timestamp(ts_seconds: int, secrets_info: Mapping[str, str | No
         )
 
 
-def _cleanup_recent_psp_events(now: int) -> None:
-    cutoff = now - _RECENT_PSP_EVENTS_TTL_SECONDS
+def _cleanup_recent_psp_events(now: int | None = None) -> None:
+    current = now or int(time.time())
+    cutoff = current - _RECENT_PSP_EVENTS_TTL_SECONDS
     for eid, seen_ts in list(_recent_psp_events.items()):
         if seen_ts < cutoff:
             _recent_psp_events.pop(eid, None)
@@ -69,8 +70,7 @@ def _is_recent_replay(event_id: str | None, ts_seconds: int) -> bool:
     if not event_id:
         return False
 
-    now = ts_seconds or int(time.time())
-    _cleanup_recent_psp_events(now)
+    _cleanup_recent_psp_events()
 
     return event_id in _recent_psp_events
 
@@ -79,9 +79,8 @@ def remember_successful_psp_event(event_id: str | None, ts_seconds: int) -> None
     if not event_id:
         return
 
-    now = ts_seconds or int(time.time())
-    _cleanup_recent_psp_events(now)
-    _recent_psp_events[event_id] = now
+    _cleanup_recent_psp_events()
+    _recent_psp_events[event_id] = int(time.time())
 
 
 def _masked_secret_status(secrets_info: Mapping[str, str | None]) -> dict[str, str | None]:
