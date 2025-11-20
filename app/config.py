@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///kobatella.db"
     psp_webhook_secret: str | None = None
     psp_webhook_secret_next: str | None = None
-    psp_webhook_max_drift_seconds: int = 300
+    psp_webhook_max_drift_seconds: int = 180
     SECRET_KEY: str = "change-me"
     DEV_API_KEY: str | None = Field(
         default=DEV_API_KEY,
@@ -116,9 +116,6 @@ def get_settings() -> Settings:
     return _SETTINGS_CACHE
 
 
-settings = get_settings()
-
-
 __all__ = [
     "ENV",
     "DEV_API_KEY",
@@ -128,6 +125,5 @@ __all__ = [
     "SCHEDULER_CRON",
     "Settings",
     "AppInfo",
-    "settings",
     "get_settings",
 ]

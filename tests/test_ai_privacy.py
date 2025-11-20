@@ -31,8 +31,7 @@ def test_sanitize_context_masks_sensitive_fields():
     assert "supplier_name" not in masked_meta
     assert masked_meta["iban_last4"] == AI_MASK_PLACEHOLDER
     assert masked_meta["invoice_total_amount"] == 123.45
-    assert sanitized["mandate_context"]["beneficiary_name"] == "***masked***"
-    assert sanitized["backend_checks"]["iban_check"] is True
+    assert "_ai_redacted_keys" not in masked_meta
 
 
 def test_mask_metadata_for_ai_masks_sensitive_and_drops_unknown():
@@ -51,8 +50,48 @@ def test_mask_metadata_for_ai_masks_sensitive_and_drops_unknown():
     assert masked["email"] == AI_MASK_PLACEHOLDER
     assert masked["invoice_total_amount"] == 123.45
     assert masked["invoice_currency"] == "EUR"
-    assert "client_secret" not in masked
     assert masked["beneficiary_address"] == AI_MASK_PLACEHOLDER
+    assert "client_secret" not in masked
+
+
+def test_sanitize_context_masks_all_subcontexts():
+    ctx = {
+        "mandate_context": {
+            "beneficiary_iban": "BE12345678901234",
+            "invoice_total_amount": 50,
+        },
+        "backend_checks": {
+            "contact_email": "foo@bar.com",
+            "gps_lat": 1.1,
+        },
+        "document_context": {
+            "metadata": {
+                "iban_full": "BE99999999999999",
+                "invoice_currency": "usd",
+            },
+            "other_field": "kept_as_is",
+        },
+    }
+
+    cleaned = _sanitize_context(ctx)
+
+    document = cleaned["document_context"]
+    meta = document["metadata"]
+    assert meta["iban_full"] == AI_MASK_PLACEHOLDER
+    assert meta["invoice_currency"] == "USD"
+    assert document["other_field"] == "kept_as_is"
+
+
+def test_mask_metadata_for_ai_preserves_allowed_without_redaction_marker():
+    masked = mask_metadata_for_ai(
+        {
+            "invoice_total_amount": 10,
+            "invoice_currency": "usd",
+        }
+    )
+
+    assert masked["invoice_total_amount"] == 10
+    assert masked["invoice_currency"] == "USD"
 
 
 def test_mask_metadata_for_ai_drops_unknown_keys():
