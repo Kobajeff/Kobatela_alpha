@@ -24,7 +24,8 @@ from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
-MAX_WEBHOOK_AGE_SECONDS = 120
+_recent_psp_events: dict[str, int] = {}
+_RECENT_PSP_EVENTS_TTL_SECONDS = 300
 
 
 def _current_settings():
@@ -34,6 +35,45 @@ def _current_settings():
 def _current_secrets() -> tuple[str | None, str | None]:
     settings = _current_settings()
     return settings.psp_webhook_secret, settings.psp_webhook_secret_next
+
+
+def _validate_psp_timestamp(ts_seconds: int, secrets_info: Mapping[str, str | None]) -> None:
+    settings = _current_settings()
+    max_drift = getattr(settings, "psp_webhook_max_drift_seconds", 180)
+    now = int(time.time())
+    age = abs(now - ts_seconds)
+
+    if age > max_drift:
+        logger.warning(
+            "PSP webhook timestamp outside allowed window",
+            extra={"psp_secret_status": _masked_secret_status(secrets_info), "age": age},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response(
+                "WEBHOOK_TIMESTAMP_DRIFT",
+                "Webhook timestamp is outside allowed window.",
+                {"age_seconds": age, "max_drift_seconds": max_drift},
+            ),
+        )
+
+
+def _is_recent_replay(event_id: str | None, ts_seconds: int) -> bool:
+    if not event_id:
+        return False
+
+    now = ts_seconds or int(time.time())
+    cutoff = now - _RECENT_PSP_EVENTS_TTL_SECONDS
+
+    for eid, seen_ts in list(_recent_psp_events.items()):
+        if seen_ts < cutoff:
+            _recent_psp_events.pop(eid, None)
+
+    if event_id in _recent_psp_events:
+        return True
+
+    _recent_psp_events[event_id] = now
+    return False
 
 
 def _masked_secret_status(secrets_info: Mapping[str, str | None]) -> dict[str, str | None]:
@@ -64,17 +104,17 @@ def _compute_webhook_signature(secret: str, body: bytes, timestamp: str) -> str:
     return hmac.new(secret.encode("utf-8"), msg, hashlib.sha256).hexdigest()
 
 
-def verify_psp_webhook_signature(raw_body: bytes, headers: Mapping[str, str]) -> None:
+def verify_psp_webhook_signature(raw_body: bytes, headers: Mapping[str, str]) -> int:
     """Validate PSP webhook signature and timestamp and raise on failure."""
 
-    settings = _current_settings()
     provided_sig = _get_header(headers, "X-PSP-Signature")
     ts = _get_header(headers, "X-PSP-Timestamp")
 
-    secrets = [s for s in (settings.psp_webhook_secret, settings.psp_webhook_secret_next) if s]
+    primary_secret, secondary_secret = _current_secrets()
+    secrets = [s for s in (primary_secret, secondary_secret) if s]
     secrets_info = {
-        "primary": settings.psp_webhook_secret,
-        "secondary": settings.psp_webhook_secret_next,
+        "primary": primary_secret,
+        "secondary": secondary_secret,
     }
     if not secrets:
         logger.error(
@@ -122,25 +162,12 @@ def verify_psp_webhook_signature(raw_body: bytes, headers: Mapping[str, str]) ->
                 ),
             )
 
-    now = int(time.time())
-    age = abs(now - ts_seconds)
-    if age > MAX_WEBHOOK_AGE_SECONDS:
-        logger.warning(
-            "PSP webhook timestamp outside allowed window",
-            extra={"psp_secret_status": _masked_secret_status(secrets_info), "age": age},
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=error_response(
-                "WEBHOOK_TIMESTAMP_OUT_OF_RANGE",
-                "Webhook timestamp is outside allowed window.",
-            ),
-        )
+    _validate_psp_timestamp(ts_seconds, secrets_info)
 
     for secret in secrets:
         expected = _compute_webhook_signature(secret, raw_body, ts)
         if hmac.compare_digest(expected, provided_sig):
-            return
+            return ts_seconds
 
     logger.warning(
         "PSP webhook signature mismatch",
@@ -153,6 +180,14 @@ def verify_psp_webhook_signature(raw_body: bytes, headers: Mapping[str, str]) ->
             "Invalid PSP webhook signature.",
         ),
     )
+
+
+def ensure_not_recent_replay(event_id: str | None, ts_seconds: int) -> None:
+    if _is_recent_replay(event_id, ts_seconds):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response("WEBHOOK_REPLAY", "Duplicate PSP webhook event detected."),
+        )
 
 
 def register_psp_event_or_raise_replay(db: Session, provider: str, event_id: str) -> None:
@@ -312,4 +347,9 @@ def _mark_payment_error(db: Session, *, psp_ref: str | None) -> None:
     logger.info("Payment marked as error", extra={"payment_id": payment.id})
 
 
-__all__ = ["handle_event", "verify_psp_webhook_signature", "register_psp_event_or_raise_replay"]
+__all__ = [
+    "handle_event",
+    "verify_psp_webhook_signature",
+    "register_psp_event_or_raise_replay",
+    "ensure_not_recent_replay",
+]

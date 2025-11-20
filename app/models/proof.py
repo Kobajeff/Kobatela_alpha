@@ -2,7 +2,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Float, ForeignKey, JSON, Numeric, String, Text
+from sqlalchemy import DateTime, ForeignKey, JSON, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -38,7 +38,10 @@ class Proof(Base):
 
     # AI Proof Advisor fields
     ai_risk_level: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
-    ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ai_score: Mapped[Decimal | None] = mapped_column(
+        Numeric(4, 3, asdecimal=True),
+        nullable=True,
+    )
     ai_flags: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     ai_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
