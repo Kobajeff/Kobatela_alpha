@@ -344,7 +344,7 @@ def submit_proof(
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
         db.add(
             AuditLog(
-                actor="system:invoice_ocr",
+                actor="invoice_ocr",
                 action="INVOICE_OCR_RUN",
                 entity="Proof",
                 entity_id=proof.id,
@@ -363,8 +363,8 @@ def submit_proof(
     if ai_result:
         db.add(
             AuditLog(
-                actor="system:ai_proof_advisor",
-                action="AI_PROOF_ANALYSIS",
+                actor="ai_proof_advisor",
+                action="AI_PROOF_ASSESSMENT",
                 entity="Proof",
                 entity_id=proof.id,
                 data_json=sanitize_payload_for_audit(
@@ -372,8 +372,9 @@ def submit_proof(
                         "escrow_id": payload.escrow_id,
                         "milestone_id": milestone.id,
                         "proof_type": payload.type,
-                        "ai_flags": ai_result.get("flags"),
-                        "ai_risk_level": ai_result.get("risk_level"),
+                        "risk_level": ai_result.get("risk_level"),
+                        "score": ai_result.get("score"),
+                        "flags": ai_result.get("flags"),
                     }
                 ),
                 at=utcnow(),

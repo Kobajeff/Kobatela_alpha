@@ -217,7 +217,13 @@ def handle_event(
         )
 
     if kind in {"payment.settled", "payment_succeeded"}:
-        _mark_payment_settled(db, psp_ref=psp_ref)
+        _mark_payment_settled(
+            db,
+            psp_ref=psp_ref,
+            provider=provider,
+            event_id=event_id,
+            status=kind,
+        )
     elif kind in {"payment.failed", "payment_failed"}:
         _mark_payment_error(db, psp_ref=psp_ref)
 
@@ -228,7 +234,14 @@ def handle_event(
     return event
 
 
-def _mark_payment_settled(db: Session, *, psp_ref: str | None) -> None:
+def _mark_payment_settled(
+    db: Session,
+    *,
+    psp_ref: str | None,
+    provider: str,
+    event_id: str,
+    status: str,
+) -> None:
     """Mark a payment as settled if a PSP confirmation references it."""
 
     if not psp_ref:
@@ -247,8 +260,13 @@ def _mark_payment_settled(db: Session, *, psp_ref: str | None) -> None:
     finalize_payment_settlement(
         db,
         payment,
-        source="psp",
-        extra={"psp_ref": psp_ref},
+        source="psp_webhook",
+        extra={
+            "psp_ref": psp_ref,
+            "provider": provider,
+            "event_id": event_id,
+            "psp_status": status,
+        },
     )
     logger.info("Payment settled", extra={"payment_id": payment.id})
 

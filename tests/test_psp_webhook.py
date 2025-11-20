@@ -16,6 +16,7 @@ import pytest
 from app.config import get_settings
 from app.main import _assert_psp_webhook_secrets
 from app.models import (
+    AuditLog,
     EscrowAgreement,
     EscrowStatus,
     Payment,
@@ -87,6 +88,19 @@ async def test_psp_webhook_settles_payment(client, db_session):
     db_session.refresh(payment)
     assert payment.status == PaymentStatus.SETTLED
     assert db_session.query(PSPWebhookEvent).count() == 1
+
+    audit = (
+        db_session.query(AuditLog)
+        .filter(
+            AuditLog.entity == "Payment",
+            AuditLog.entity_id == payment.id,
+            AuditLog.action == "PAYMENT_SETTLED",
+        )
+        .one_or_none()
+    )
+    assert audit is not None
+    assert audit.data_json.get("provider") == "default"
+    assert audit.data_json.get("event_id") == "evt-psp-1"
 
     repeat = await client.post(
         "/psp/webhook",
