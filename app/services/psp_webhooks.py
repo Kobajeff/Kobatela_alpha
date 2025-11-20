@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import hashlib
+import hmac
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -15,6 +19,7 @@ from app.models.psp_webhook import PSPWebhookEvent
 from app.models.audit import AuditLog
 from app.services.payments import finalize_payment_settlement
 from app.utils.audit import sanitize_payload_for_audit
+from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
@@ -120,8 +125,11 @@ def handle_event(
 
     existing = db.query(PSPWebhookEvent).filter(PSPWebhookEvent.event_id == event_id).one_or_none()
     if existing:
-        logger.info("PSP webhook already processed", extra={"event_id": event_id})
-        return existing
+        logger.warning("Replay detected for PSP webhook", extra={"event_id": event_id})
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_response("PSP_WEBHOOK_REPLAY", "Duplicate webhook event."),
+        )
 
     event = PSPWebhookEvent(event_id=event_id, psp_ref=psp_ref, kind=kind, raw_json=payload)
     db.add(event)

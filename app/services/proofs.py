@@ -27,7 +27,10 @@ from app.services import (
 from app.services.ai_proof_advisor import call_ai_proof_advisor
 from app.services.ai_proof_flags import ai_enabled
 from app.services.document_checks import compute_document_backend_checks
-from app.services.invoice_ocr import enrich_metadata_with_invoice_ocr
+from app.services.invoice_ocr import (
+    enrich_metadata_with_invoice_ocr,
+    normalize_invoice_amount_and_currency,
+)
 from app.services.idempotency import get_existing_by_key
 from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
@@ -64,36 +67,6 @@ def _json_safe_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any] | 
     return {key: _json_safe_value(value) for key, value in dict(metadata).items()}
 
 
-def _extract_invoice_fields(
-    metadata: Mapping[str, Any] | None,
-) -> tuple[Decimal | None, str | None]:
-    """Return normalized invoice amount/currency extracted from metadata."""
-
-    if not isinstance(metadata, Mapping):
-        return None, None
-
-    invoice_total_amount: Decimal | None = None
-    invoice_currency: str | None = None
-
-    raw_amount = metadata.get("invoice_total_amount") or metadata.get(
-        "ocr_invoice_total_amount"
-    )
-    raw_currency = metadata.get("invoice_currency") or metadata.get(
-        "ocr_invoice_currency"
-    )
-
-    if raw_amount is not None:
-        try:
-            invoice_total_amount = Decimal(str(raw_amount))
-        except Exception:  # noqa: BLE001
-            invoice_total_amount = None
-
-    if isinstance(raw_currency, str) and len(raw_currency.strip()) == 3:
-        invoice_currency = raw_currency.strip().upper()
-
-    return invoice_total_amount, invoice_currency
-
-
 def submit_proof(
     db: Session, payload: ProofCreate, *, actor: str | None = None
 ) -> Proof:
@@ -123,7 +96,9 @@ def submit_proof(
             existing_metadata=metadata_payload,
         )
 
-    invoice_total_amount, invoice_currency = _extract_invoice_fields(metadata_payload)
+    invoice_total_amount, invoice_currency = normalize_invoice_amount_and_currency(
+        metadata_payload
+    )
     metadata_payload = _json_safe_metadata(metadata_payload) or {}
     review_reason: str | None = None
     auto_approve = False
@@ -352,6 +327,45 @@ def submit_proof(
         proof.ai_checked_at = utcnow()
     db.add(proof)
     db.flush()
+
+    if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
+        db.add(
+            AuditLog(
+                actor="system:invoice_ocr",
+                action="INVOICE_OCR_RUN",
+                entity="Proof",
+                entity_id=proof.id,
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_id": milestone.id,
+                        "ocr_status": metadata_payload.get("ocr_status"),
+                        "ocr_provider": metadata_payload.get("ocr_provider"),
+                    }
+                ),
+                at=utcnow(),
+            )
+        )
+
+    if ai_result:
+        db.add(
+            AuditLog(
+                actor="system:ai_proof_advisor",
+                action="AI_PROOF_ANALYSIS",
+                entity="Proof",
+                entity_id=proof.id,
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_id": milestone.id,
+                        "proof_type": payload.type,
+                        "ai_flags": ai_result.get("flags"),
+                        "ai_risk_level": ai_result.get("risk_level"),
+                    }
+                ),
+                at=utcnow(),
+            )
+        )
 
     db.add(
         AuditLog(

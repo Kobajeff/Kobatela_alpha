@@ -92,7 +92,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
             "X-PSP-Ref": "psp-123",
         },
     )
-    assert repeat.status_code == 200
+    assert repeat.status_code == 409
     assert db_session.query(PSPWebhookEvent).count() == 1
 
 

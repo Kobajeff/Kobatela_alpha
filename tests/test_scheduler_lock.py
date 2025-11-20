@@ -46,3 +46,18 @@ def test_lock_can_be_reacquired_after_expiry(monkeypatch, db_session):
     assert try_acquire_scheduler_lock(db_session=db_session, ttl_seconds=300)
 
     release_scheduler_lock(db_session=db_session)
+
+
+def test_describe_scheduler_lock_contains_expiry(db_session, monkeypatch):
+    from app.services.scheduler_lock import describe_scheduler_lock
+
+    release_scheduler_lock(db_session=db_session)
+    monkeypatch.setattr("app.services.scheduler_lock._owner_id", lambda: "node-A")
+    assert try_acquire_scheduler_lock(db_session=db_session, ttl_seconds=60)
+
+    info = describe_scheduler_lock(db_session=db_session)
+    assert info.get("present") is True
+    assert "age_seconds" in info
+    assert "expires_in_seconds" in info
+
+    release_scheduler_lock(db_session=db_session)

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import os
 import socket
+import os
+import socket
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -122,7 +124,8 @@ def release_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None 
 
     owner = _owner_id()
     try:
-        with session.begin():
+        context_manager = session.begin_nested() if session.in_transaction() else session.begin()
+        with context_manager:
             lock = (
                 session.execute(
                     select(SchedulerLock).where(SchedulerLock.name == name).with_for_update()
@@ -135,23 +138,39 @@ def release_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None 
             session.close()
 
 
-def describe_scheduler_lock(name: str = LOCK_NAME) -> dict[str, object]:
+def describe_scheduler_lock(name: str = LOCK_NAME, *, db_session: Session | None = None) -> dict[str, object]:
     """Return a lightweight description of the current scheduler lock state."""
 
-    session, should_close = _session()
+    session, should_close = _session(db_session)
     if session is None:
         return {"status": "unknown", "owner": None}
 
     owner = _owner_id()
     try:
-        lock = (
-            session.execute(select(SchedulerLock).where(SchedulerLock.name == name)).scalar_one_or_none()
-        )
+        lock = session.execute(select(SchedulerLock).where(SchedulerLock.name == name)).scalar_one_or_none()
         if lock is None:
-            return {"status": "none", "owner": None}
-        if lock.owner == owner:
-            return {"status": "owned_by_self", "owner": lock.owner}
-        return {"status": "owned_by_other", "owner": lock.owner}
+            return {"status": "none", "owner": None, "present": False}
+
+        now = datetime.now(timezone.utc)
+        acquired_at = lock.acquired_at
+        if acquired_at is not None and acquired_at.tzinfo is None:
+            acquired_at = acquired_at.replace(tzinfo=timezone.utc)
+        expires_at = getattr(lock, "expires_at", None)
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        age_seconds = (now - acquired_at).total_seconds() if acquired_at else None
+        expires_in = (expires_at - now).total_seconds() if expires_at else None
+
+        status = "owned_by_self" if lock.owner == owner else "owned_by_other"
+        return {
+            "status": status,
+            "owner": lock.owner,
+            "present": True,
+            "age_seconds": age_seconds,
+            "expires_in_seconds": expires_in,
+            "stale": expires_in is not None and expires_in < -60,
+        }
     finally:
         if should_close:
             session.close()

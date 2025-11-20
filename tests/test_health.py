@@ -14,3 +14,6 @@ async def test_healthcheck(client):
     fps = payload["psp_webhook_secret_fingerprints"]
     assert "primary" in fps
     assert "next" in fps
+    assert payload.get("db_status") in {"ok", "error"}
+    assert payload.get("migrations_status") in {"up_to_date", "out_of_date", "unknown"}
+    assert "scheduler_lock" in payload

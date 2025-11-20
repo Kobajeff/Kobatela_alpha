@@ -2,15 +2,22 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+
+from sqlalchemy import text
 
 from fastapi import APIRouter
 
 from app.config import SCHEDULER_ENABLED, Settings, get_settings
 from app.core.runtime_state import is_scheduler_active
+from app.db import get_engine
 from app.services.ai_proof_flags import ai_enabled
 from app.services.scheduler_lock import describe_scheduler_lock
 
 router = APIRouter(prefix="/health", tags=["health"])
+logger = logging.getLogger(__name__)
+
+LATEST_MIGRATION_REV = "4e1bd5489e1c"
 
 def _psp_webhook_secret_status() -> str:
     """Return 'missing' | 'partial' | 'ok' depending on PSP webhook secrets."""
@@ -37,6 +44,31 @@ def _secret_status(primary: str | None, secondary: str | None) -> str:
     if primary or secondary:
         return "partial"
     return "missing"
+
+
+def _db_status() -> str:
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return "ok"
+    except Exception:  # noqa: BLE001
+        logger.exception("DB health check failed")
+        return "error"
+
+
+def _migrations_status() -> str:
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT version_num FROM alembic_version"))
+            current = result.scalar()
+        if current == LATEST_MIGRATION_REV:
+            return "up_to_date"
+        return "out_of_date"
+    except Exception:  # noqa: BLE001
+        logger.exception("Migration check failed")
+        return "unknown"
 
 
 def _psp_secret_fingerprints(settings: Settings) -> dict[str, str | None]:
@@ -68,5 +100,7 @@ def healthcheck() -> dict[str, object]:
         "ai_proof_enabled": ai_enabled(),
         "scheduler_config_enabled": bool(getattr(settings, "SCHEDULER_ENABLED", SCHEDULER_ENABLED)),
         "scheduler_running": is_scheduler_active(),
+        "db_status": _db_status(),
+        "migrations_status": _migrations_status(),
         "scheduler_lock": describe_scheduler_lock(),
     }
