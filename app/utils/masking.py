@@ -136,17 +136,15 @@ SENSITIVE_PATTERNS = (
     "account",
     "acct",
     "email",
-    "mail",
     "phone",
     "tel",
+    "mobile",
     "address",
     "addr",
     "ssn",
-    "nin",
+    "nif",
     "id_number",
     "passport",
-    "nif",
-    "niss",
 )
 
 AI_MASK_PLACEHOLDER = "***redacted***"

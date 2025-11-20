@@ -272,8 +272,8 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
     else:
         masked_doc.pop("metadata", None)
     ctx["document_context"] = masked_doc
-    ctx["mandate_context"] = mask_proof_metadata(ctx.get("mandate_context") or {}) or {}
-    ctx["backend_checks"] = mask_proof_metadata(ctx.get("backend_checks") or {}) or {}
+    ctx["mandate_context"] = mask_metadata_for_ai(ctx.get("mandate_context") or {})
+    ctx["backend_checks"] = mask_metadata_for_ai(ctx.get("backend_checks") or {})
     return ctx
 
 
