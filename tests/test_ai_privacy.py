@@ -32,12 +32,21 @@ def test_sanitize_context_masks_sensitive_fields():
     assert masked_meta["iban_last4"] == AI_MASK_PLACEHOLDER
     assert masked_meta["invoice_total_amount"] == 123.45
     assert "_ai_redacted_keys" not in masked_meta
+    assert set(sanitized["_ai_redacted_keys"]) >= {
+        "iban_full",
+        "iban_last4",
+        "email",
+        "beneficiary_name",
+        "iban",
+        "iban_check",
+        "amount_check",
+    }
     assert "beneficiary_name" not in sanitized["mandate_context"]
     assert sanitized["backend_checks"]["iban_check"] == AI_MASK_PLACEHOLDER
 
 
 def test_mask_metadata_for_ai_masks_sensitive_and_drops_unknown():
-    masked = mask_metadata_for_ai(
+    masked, redacted = mask_metadata_for_ai(
         {
             "iban_full": "BE68539007547034",
             "email": "john@doe.com",
@@ -54,6 +63,12 @@ def test_mask_metadata_for_ai_masks_sensitive_and_drops_unknown():
     assert masked["invoice_currency"] == "EUR"
     assert masked["beneficiary_address"] == AI_MASK_PLACEHOLDER
     assert "client_secret" not in masked
+    assert set(redacted) >= {
+        "iban_full",
+        "email",
+        "client_secret",
+        "beneficiary_address",
+    }
 
 
 def test_sanitize_context_masks_all_subcontexts():
@@ -90,10 +105,15 @@ def test_sanitize_context_masks_all_subcontexts():
     assert meta["iban_full"] == AI_MASK_PLACEHOLDER
     assert meta["invoice_currency"] == "USD"
     assert document["other_field"] == "kept_as_is"
+    assert set(cleaned.get("_ai_redacted_keys", [])) >= {
+        "beneficiary_iban",
+        "contact_email",
+        "iban_full",
+    }
 
 
 def test_mask_metadata_for_ai_preserves_allowed_without_redaction_marker():
-    masked = mask_metadata_for_ai(
+    masked, redacted = mask_metadata_for_ai(
         {
             "invoice_total_amount": 10,
             "invoice_currency": "usd",
@@ -102,13 +122,13 @@ def test_mask_metadata_for_ai_preserves_allowed_without_redaction_marker():
 
     assert masked["invoice_total_amount"] == 10
     assert masked["invoice_currency"] == "USD"
-    assert "_ai_redacted_keys" not in masked
+    assert redacted == []
 
 
 def test_mask_metadata_for_ai_drops_unknown_keys():
     from app.utils.masking import mask_metadata_for_ai
 
-    masked = mask_metadata_for_ai(
+    masked, redacted = mask_metadata_for_ai(
         {
             "iban_full": "BE68539007547034",
             "email": "john@doe.com",
@@ -122,7 +142,8 @@ def test_mask_metadata_for_ai_drops_unknown_keys():
     assert masked["email"] == "***redacted***"
     assert masked["invoice_total_amount"] == 123.45
     assert masked["invoice_currency"] == "EUR"
-    assert masked["_ai_redacted_keys"] == ["iban_full", "email", "client_secret"]
+    assert "client_secret" not in masked
+    assert set(redacted) >= {"iban_full", "email", "client_secret"}
 
 
 @pytest.mark.anyio("asyncio")

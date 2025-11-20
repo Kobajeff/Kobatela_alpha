@@ -261,19 +261,32 @@ def _sanitize_context(context: Dict[str, Any]) -> Dict[str, Any]:
     except (TypeError, ValueError):
         ctx = {}
 
+    redacted_keys: list[str] = []
     doc = ctx.get("document_context") or {}
     url = doc.get("storage_url")
     if isinstance(url, str):
         doc["storage_url"] = url.rsplit("/", 1)[-1]
-    metadata_for_ai = mask_metadata_for_ai(doc.get("metadata"))
+    metadata_for_ai, doc_redacted = mask_metadata_for_ai(doc.get("metadata"))
+    redacted_keys.extend(doc_redacted)
     masked_doc = mask_proof_metadata(doc) or {}
     if metadata_for_ai:
         masked_doc["metadata"] = metadata_for_ai
     else:
         masked_doc.pop("metadata", None)
     ctx["document_context"] = masked_doc
-    ctx["mandate_context"] = mask_metadata_for_ai(ctx.get("mandate_context") or {})
-    ctx["backend_checks"] = mask_metadata_for_ai(ctx.get("backend_checks") or {})
+
+    mandate_masked, mandate_redacted = mask_metadata_for_ai(ctx.get("mandate_context") or {})
+    ctx["mandate_context"] = mandate_masked
+    redacted_keys.extend(mandate_redacted)
+
+    backend_masked, backend_redacted = mask_metadata_for_ai(ctx.get("backend_checks") or {})
+    ctx["backend_checks"] = backend_masked
+    redacted_keys.extend(backend_redacted)
+
+    if redacted_keys:
+        ctx["_ai_redacted_keys"] = redacted_keys
+    else:
+        ctx.pop("_ai_redacted_keys", None)
     return ctx
 
 

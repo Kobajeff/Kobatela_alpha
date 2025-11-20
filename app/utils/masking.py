@@ -159,7 +159,7 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     """
 
     if not isinstance(metadata, Mapping):
-        return {}
+        return {}, []
 
     cleaned: dict[str, Any] = {}
     redacted_keys: list[str] = []
@@ -167,16 +167,16 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     for key, value in metadata.items():
         key_lower = key.lower()
 
+        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
+            cleaned[key] = AI_MASK_PLACEHOLDER
+            redacted_keys.append(key)
+            continue
+
         if key_lower in AI_ALLOWED_METADATA_KEYS:
             if key_lower == "invoice_currency" and isinstance(value, str):
                 cleaned[key] = value.upper()
             else:
                 cleaned[key] = value
-            continue
-
-        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
-            cleaned[key] = AI_MASK_PLACEHOLDER
-            redacted_keys.append(key)
             continue
 
         redacted_keys.append(key)
@@ -188,7 +188,7 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
             extra={"keys": redacted_keys},
         )
 
-    return cleaned
+    return cleaned, redacted_keys
 
 
 __all__ = ["mask_proof_metadata", "mask_metadata_for_ai"]
