@@ -1,4 +1,4 @@
-# Kobatela_alpha — Capability & Stability Audit (2025-02-05)
+# Kobatela_alpha — Capability & Stability Audit (2025-11-21)
 
 ## A. Executive summary
 - API surface covers escrow lifecycle, proof submission/decision, PSP webhook handling, spend controls, and public-sector aggregation, all guarded by API-key scopes and audit logs on critical reads/writes. 【F:app/routers/escrow.py†L21-L107】【F:app/routers/proofs.py†L24-L54】【F:app/routers/psp.py†L17-L67】【F:app/routers/spend.py†L21-L116】【F:app/routers/kct_public.py†L21-L163】
