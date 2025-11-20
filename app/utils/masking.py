@@ -136,30 +136,33 @@ SENSITIVE_PATTERNS = (
     "account",
     "acct",
     "email",
-    "mail",
     "phone",
     "tel",
+    "mobile",
     "address",
     "addr",
     "ssn",
-    "nin",
+    "nif",
     "id_number",
     "passport",
-    "nif",
-    "niss",
 )
 
 AI_MASK_PLACEHOLDER = "***redacted***"
 
 
 def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Whitelist + redaction for AI privacy (deny by default)."""
+    """Whitelist + redaction for AI privacy (deny by default).
+
+    - Only explicitly allowlisted keys pass through unchanged (currency upper-cased).
+    - Keys matching sensitive patterns are replaced by a placeholder.
+    - All other keys are ignored (not sent to AI).
+    """
 
     if not isinstance(metadata, Mapping):
         return {}
 
     cleaned: dict[str, Any] = {}
-    dropped_keys: list[str] = []
+
     for key, value in metadata.items():
         key_lower = key.lower()
 
@@ -173,14 +176,6 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
             else:
                 cleaned[key] = value
             continue
-
-        dropped_keys.append(key)
-
-    if dropped_keys:
-        logger.debug(
-            "AI metadata keys dropped by mask_metadata_for_ai",
-            extra={"keys": dropped_keys},
-        )
 
     return cleaned
 
