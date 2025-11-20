@@ -231,6 +231,16 @@ def handle_event(
     db.add(event)
     db.commit()
     db.refresh(event)
+    logger.info(
+        "PSP webhook processed",
+        extra={
+            "provider": provider,
+            "event_id": event_id,
+            "status": "success",
+            "psp_ref": psp_ref,
+            "kind": kind,
+        },
+    )
     return event
 
 

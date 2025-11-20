@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 
@@ -256,82 +257,90 @@ def call_ai_proof_advisor(
 ) -> Dict[str, Any]:
     """Call the Kobatela AI Proof Advisor."""
 
+    start = time.monotonic()
+    status = "success"
+    outcome_reason: str | None = None
     settings = get_settings()
 
-    if not ai_enabled():
-        logger.warning("AI Proof Advisor requested while feature is disabled; returning fallback result.")
-        return _fallback_response(
-            flags=["ai_disabled"],
-            explanation=(
-                "L'analyse automatique n'est pas activée pour cet environnement. "
-                "Merci d'effectuer une revue manuelle."
-            ),
-        )
+    try:
+        if not ai_enabled():
+            status = "disabled"
+            outcome_reason = "ai_disabled"
+            logger.warning(
+                "AI Proof Advisor requested while feature is disabled; returning fallback result."
+            )
+            return _fallback_response(
+                flags=["ai_disabled"],
+                explanation=(
+                    "L'analyse automatique n'est pas activée pour cet environnement. "
+                    "Merci d'effectuer une revue manuelle."
+                ),
+            )
 
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
-        logger.warning("OPENAI_API_KEY is not set; returning fallback AI result.")
-        return _fallback_response(
-            flags=["missing_api_key"],
-            explanation=(
-                "L'analyse automatique n'a pas pu être effectuée car la clé API n'est pas configurée. "
-                "Une revue manuelle est recommandée."
-            ),
-        )
+        api_key = settings.OPENAI_API_KEY
+        if not api_key:
+            status = "missing_api_key"
+            outcome_reason = "missing_api_key"
+            logger.warning("OPENAI_API_KEY is not set; returning fallback AI result.")
+            return _fallback_response(
+                flags=["missing_api_key"],
+                explanation=(
+                    "L'analyse automatique n'a pas pu être effectuée car la clé API n'est pas configurée. "
+                    "Une revue manuelle est recommandée."
+                ),
+            )
 
-    sanitized_context = _sanitize_context(context)
-    user_content = build_ai_user_content(sanitized_context)
-    if OpenAI is None:
-        logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
-        return _fallback_response(
-            flags=["missing_sdk"],
-            explanation=(
-                "L'analyse automatique n'a pas pu être effectuée car le SDK OpenAI n'est pas disponible. "
-                "Merci de vérifier cette preuve manuellement."
-            ),
-        )
+        sanitized_context = _sanitize_context(context)
+        user_content = build_ai_user_content(sanitized_context)
+        if OpenAI is None:
+            status = "missing_sdk"
+            outcome_reason = "missing_sdk"
+            logger.warning("OpenAI SDK is not installed; returning fallback AI result.")
+            return _fallback_response(
+                flags=["missing_sdk"],
+                explanation=(
+                    "L'analyse automatique n'a pas pu être effectuée car le SDK OpenAI n'est pas disponible. "
+                    "Merci de vérifier cette preuve manuellement."
+                ),
+            )
 
-    client = OpenAI(api_key=api_key)
+        client = OpenAI(api_key=api_key)
 
-
- 
-
-    messages: List[Dict[str, Any]] = []
-    messages.append(
-        {
-            "role": "system",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": AI_PROOF_ADVISOR_CORE_PROMPT,
-                }
-            ],
-        }
-    )
-
-    user_content_parts: List[Dict[str, Any]] = [
-        {
-            "type": "input_text",
-            "text": user_content,
-        }
-    ]
-
-    if proof_storage_url:
-        user_content_parts.append(
+        messages: List[Dict[str, Any]] = []
+        messages.append(
             {
-                "type": "input_image",
-                "image_url": proof_storage_url,
+                "role": "system",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": AI_PROOF_ADVISOR_CORE_PROMPT,
+                    }
+                ],
             }
         )
 
-    messages.append(
-        {
-            "role": "user",
-            "content": user_content_parts,
-        }
-    )
+        user_content_parts: List[Dict[str, Any]] = [
+            {
+                "type": "input_text",
+                "text": user_content,
+            }
+        ]
 
-    try:
+        if proof_storage_url:
+            user_content_parts.append(
+                {
+                    "type": "input_image",
+                    "image_url": proof_storage_url,
+                }
+            )
+
+        messages.append(
+            {
+                "role": "user",
+                "content": user_content_parts,
+            }
+        )
+
         resp = client.responses.create(
             model=model or ai_model(),
             input=messages,
@@ -360,6 +369,8 @@ def call_ai_proof_advisor(
 
     except Exception as exc:  # noqa: BLE001
         if RateLimitError and isinstance(exc, RateLimitError):
+            status = "rate_limited"
+            outcome_reason = "rate_limited"
             logger.warning("AI proof advisor rate limited", extra={"error": str(exc)})
             return _fallback_response(
                 flags=["rate_limited_or_timeout"],
@@ -370,6 +381,8 @@ def call_ai_proof_advisor(
                 ),
             )
         if APITimeoutError and isinstance(exc, APITimeoutError):
+            status = "timeout"
+            outcome_reason = "timeout"
             logger.warning("AI proof advisor timeout", extra={"error": str(exc)})
             return _fallback_response(
                 flags=["rate_limited_or_timeout"],
@@ -379,6 +392,8 @@ def call_ai_proof_advisor(
                 ),
             )
         if APIError and isinstance(exc, APIError):
+            status = "api_error"
+            outcome_reason = "api_error"
             logger.exception("AI proof advisor API error: %s", exc)
             return _fallback_response(
                 flags=["api_error"],
@@ -389,8 +404,13 @@ def call_ai_proof_advisor(
                 ),
             )
 
+        status = "error"
+        outcome_reason = "exception_during_call"
         logger.exception("AI proof advisor call failed: %s", exc)
-        logger.warning("AI proof advisor fallback response emitted", extra={"reason": "exception_during_call"})
+        logger.warning(
+            "AI proof advisor fallback response emitted",
+            extra={"reason": "exception_during_call"},
+        )
         return _fallback_response(
             flags=["exception_during_call"],
             score=0.4,
@@ -398,4 +418,15 @@ def call_ai_proof_advisor(
                 "L'analyse automatique de la preuve n'a pas pu être réalisée en raison d'une erreur technique. "
                 "Merci de vérifier cette preuve manuellement."
             ),
+        )
+    finally:
+        duration = time.monotonic() - start
+        logger.info(
+            "AI proof advisor call completed",
+            extra={
+                "status": status,
+                "duration_seconds": duration,
+                "reason": outcome_reason,
+                "proof_storage_url_present": bool(proof_storage_url),
+            },
         )

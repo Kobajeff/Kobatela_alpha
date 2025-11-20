@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, Optional, Tuple
 
@@ -160,10 +161,14 @@ def enrich_metadata_with_invoice_ocr(
 ) -> Dict[str, Any]:
     """Enrich metadata with OCR info without overwriting user-supplied values."""
 
+    start = time.monotonic()
+    status = "success"
+    provider = None
     metadata = dict(existing_metadata or {})
     provider = getattr(_current_settings(), "INVOICE_OCR_PROVIDER", "none")
 
     if not invoice_ocr_enabled():
+        status = "skipped"
         logger.info("Invoice OCR disabled; skipping enrichment for %s", storage_url)
         metadata["ocr_status"] = "disabled"
         metadata["ocr_provider"] = provider
@@ -196,7 +201,19 @@ def enrich_metadata_with_invoice_ocr(
         return metadata
 
     except Exception as exc:  # noqa: BLE001
+        status = "error"
         logger.exception("Invoice OCR failed for %s: %s", storage_url, exc)
         metadata["ocr_status"] = "error"
         metadata["ocr_provider"] = provider
         return metadata
+    finally:
+        duration = time.monotonic() - start
+        logger.info(
+            "Invoice OCR enrichment completed",
+            extra={
+                "status": status,
+                "duration_seconds": duration,
+                "provider": provider,
+                "storage_url": storage_url,
+            },
+        )
