@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
 from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
-from app.utils.masking import mask_metadata_for_ai
+from app.utils.masking import (
+    AI_MASK_PLACEHOLDER,
+    SENSITIVE_PATTERNS,
+    mask_metadata_for_ai,
+)
 
 # Simple in-memory circuit breaker + metrics for AI Proof Advisor
 _AI_FAILURE_COUNT: int = 0
@@ -269,6 +273,30 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _mask_sensitive_only(data: dict[str, Any]) -> dict[str, Any]:
+    """Mask sensitive keys but keep non-sensitive fields intact."""
+
+    if not isinstance(data, dict):
+        return {}
+
+    cleaned: dict[str, Any] = {}
+    redacted_keys: list[str] = []
+
+    for key, value in data.items():
+        key_lower = str(key).lower()
+
+        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
+            cleaned[key] = AI_MASK_PLACEHOLDER
+            redacted_keys.append(key)
+        else:
+            cleaned[key] = value
+
+    if redacted_keys:
+        cleaned["_ai_redacted_keys"] = redacted_keys
+
+    return cleaned
+
+
 def _sanitize_context(context: dict) -> dict:
     """
     Ensure FULL privacy:
@@ -279,17 +307,17 @@ def _sanitize_context(context: dict) -> dict:
     if not isinstance(context, dict):
         return {}
 
-    # Mandate context
-    mandate = context.get("mandate_context", {}) or {}
-    cleaned_mandate = mask_metadata_for_ai(mandate)
+    # Mandate context → mask sensitive keys only
+    mandate = context.get("mandate_context") or {}
+    cleaned_mandate = _mask_sensitive_only(mandate)
 
-    # Backend checks
-    backend = context.get("backend_checks", {}) or {}
-    cleaned_backend = mask_metadata_for_ai(backend)
+    # Backend checks → mask sensitive keys only
+    backend = context.get("backend_checks") or {}
+    cleaned_backend = _mask_sensitive_only(backend)
 
-    # Document context
-    doc_ctx = context.get("document_context", {}) or {}
-    doc_meta = doc_ctx.get("metadata", {}) or {}
+    # Document context → strict metadata masking
+    doc_ctx = context.get("document_context") or {}
+    doc_meta = doc_ctx.get("metadata") or {}
 
     cleaned_doc_ctx = {
         **doc_ctx,
