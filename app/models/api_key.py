@@ -23,6 +23,7 @@ class ApiKey(Base):
     prefix: Mapped[str] = mapped_column(String(12), nullable=False)
     key_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     scope: Mapped[ApiScope] = mapped_column(Enum(ApiScope), nullable=False, default=ApiScope.sender)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

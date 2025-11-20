@@ -51,6 +51,7 @@ class ApiKeyRead(BaseModel):
     id: int
     name: str
     scope: ApiScope
+    user_id: int | None
     is_active: bool
     created_at: datetime
     expires_at: datetime | None
