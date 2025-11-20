@@ -5,6 +5,8 @@ import hashlib
 import hmac
 import json
 import os
+import time
+import hashlib
 from datetime import timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -33,6 +35,10 @@ def _create_user(db_session, username: str) -> User:
 @pytest.mark.anyio
 async def test_psp_webhook_settles_payment(client, db_session):
     """A PSP settlement webhook should mark the payment as settled and be idempotent."""
+
+    db_session.query(PSPWebhookEvent).delete()
+    db_session.commit()
+    assert db_session.query(PSPWebhookEvent).count() == 0
 
     client_user = _create_user(db_session, "client-webhook")
     provider_user = _create_user(db_session, "provider-webhook")
@@ -76,7 +82,7 @@ async def test_psp_webhook_settles_payment(client, db_session):
             "X-PSP-Ref": "psp-123",
         },
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     db_session.refresh(payment)
     assert payment.status == PaymentStatus.SETTLED
     assert db_session.query(PSPWebhookEvent).count() == 1
@@ -97,8 +103,11 @@ async def test_psp_webhook_settles_payment(client, db_session):
 
 
 @pytest.mark.anyio
-async def test_psp_webhook_accepts_next_secret(client):
+async def test_psp_webhook_accepts_next_secret(client, db_session):
     settings = get_settings()
+    db_session.query(PSPWebhookEvent).delete()
+    db_session.commit()
+    assert db_session.query(PSPWebhookEvent).count() == 0
     original_secret = settings.psp_webhook_secret
     original_next = settings.psp_webhook_secret_next
     try:
@@ -124,7 +133,7 @@ async def test_psp_webhook_accepts_next_secret(client):
                 "X-PSP-Event-Id": "evt-rot", 
             },
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.text
     finally:
         settings.psp_webhook_secret = original_secret
         settings.psp_webhook_secret_next = original_next
@@ -149,6 +158,53 @@ async def test_psp_webhook_invalid_signature(client):
         },
     )
     assert response.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_psp_webhook_timestamp_out_of_range(client):
+    payload = {"type": "payment.settled"}
+    body = json.dumps(payload).encode()
+    timestamp = str(time.time() - 500)
+    payload_to_sign = timestamp.encode() + b"." + body
+    secret = os.environ["PSP_WEBHOOK_SECRET"].encode()
+    signature = hmac.new(secret, payload_to_sign, hashlib.sha256).hexdigest()
+
+    response = await client.post(
+        "/psp/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-PSP-Signature": signature,
+            "X-PSP-Timestamp": timestamp,
+            "X-PSP-Event-Id": "evt-old-ts",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "WEBHOOK_SIGNATURE_INVALID"
+
+
+@pytest.mark.anyio
+async def test_psp_webhook_missing_event_id(client):
+    payload = {"type": "payment.settled"}
+    body = json.dumps(payload).encode()
+    timestamp = str(time.time())
+    payload_to_sign = timestamp.encode() + b"." + body
+    secret = os.environ["PSP_WEBHOOK_SECRET"].encode()
+    signature = hmac.new(secret, payload_to_sign, hashlib.sha256).hexdigest()
+
+    response = await client.post(
+        "/psp/webhook",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-PSP-Signature": signature,
+            "X-PSP-Timestamp": timestamp,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "MISSING_EVENT_ID"
 
 
 @pytest.mark.anyio

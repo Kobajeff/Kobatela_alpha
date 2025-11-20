@@ -30,6 +30,7 @@ from app.services.document_checks import compute_document_backend_checks
 from app.services.invoice_ocr import (
     enrich_metadata_with_invoice_ocr,
     normalize_invoice_amount_and_currency,
+    normalize_invoice_metadata,
 )
 from app.services.idempotency import get_existing_by_key
 from app.utils.audit import sanitize_payload_for_audit
@@ -94,6 +95,30 @@ def submit_proof(
         metadata_payload = enrich_metadata_with_invoice_ocr(
             storage_url=payload.storage_url,
             existing_metadata=metadata_payload,
+        )
+
+    normalization = normalize_invoice_metadata(metadata_payload)
+    for key, value in normalization.items():
+        if key == "normalization_errors":
+            continue
+        metadata_payload[key] = value
+
+    norm_errors = normalization.get("normalization_errors") or []
+    if norm_errors:
+        logger.warning(
+            "Invoice normalization errors on proof submission",
+            extra={
+                "escrow_id": payload.escrow_id,
+                "milestone_idx": payload.milestone_idx,
+                "errors": norm_errors,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=error_response(
+                "INVOICE_NORMALIZATION_ERROR",
+                "Invoice amount or currency is invalid.",
+            ),
         )
 
     invoice_total_amount, invoice_currency = normalize_invoice_amount_and_currency(

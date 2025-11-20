@@ -91,8 +91,11 @@ def healthcheck() -> dict[str, object]:
     settings = get_settings()
     primary_secret = settings.psp_webhook_secret
     secondary_secret = settings.psp_webhook_secret_next
+    db_status = _db_status()
+    migration_status = _migrations_status()
+    degraded = db_status != "ok" or migration_status != "up_to_date"
     return {
-        "status": "ok",
+        "status": "degraded" if degraded else "ok",
         "psp_webhook_configured": bool(primary_secret or secondary_secret),
         "psp_webhook_secret_status": _secret_status(primary_secret, secondary_secret),
         "psp_webhook_secret_fingerprints": _psp_secret_fingerprints(settings),
@@ -100,7 +103,7 @@ def healthcheck() -> dict[str, object]:
         "ai_proof_enabled": ai_enabled(),
         "scheduler_config_enabled": bool(getattr(settings, "SCHEDULER_ENABLED", SCHEDULER_ENABLED)),
         "scheduler_running": is_scheduler_active(),
-        "db_status": _db_status(),
-        "migrations_status": _migrations_status(),
+        "db_status": db_status,
+        "migrations_status": migration_status,
         "scheduler_lock": describe_scheduler_lock(),
     }

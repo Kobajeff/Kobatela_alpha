@@ -1,9 +1,11 @@
 """Helpers for masking sensitive metadata before exposing it externally."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Mapping, Sequence
 
 MASKED_PLACEHOLDER = "***masked***"
+logger = logging.getLogger(__name__)
 
 # Keys that should always be fully masked regardless of value length
 FULL_MASK_KEYS = {
@@ -144,18 +146,20 @@ SENSITIVE_PATTERNS = (
     "ssn",
     "nif",
     "id_number",
+    "address",
 )
 
 AI_MASK_PLACEHOLDER = "***redacted***"
 
 
 def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Whitelist + redaction for AI privacy."""
+    """Whitelist + redaction for AI privacy (deny by default)."""
 
     if not isinstance(metadata, Mapping):
         return {}
 
     cleaned: dict[str, Any] = {}
+    dropped_keys: list[str] = []
     for key, value in metadata.items():
         key_lower = key.lower()
 
@@ -166,6 +170,14 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
             cleaned[key] = AI_MASK_PLACEHOLDER
             continue
+
+        dropped_keys.append(key)
+
+    if dropped_keys:
+        logger.debug(
+            "AI metadata keys dropped by mask_metadata_for_ai",
+            extra={"keys": dropped_keys},
+        )
 
     return cleaned
 

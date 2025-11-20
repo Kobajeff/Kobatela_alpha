@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.services import psp_webhooks
+from app.utils.errors import error_response
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,18 @@ async def psp_webhook(
             "Invalid PSP webhook signature",
             extra={"reason": reason, "event_id": x_psp_event_id, "psp_ref": x_psp_ref},
         )
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid signature: {reason}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=error_response("WEBHOOK_SIGNATURE_INVALID", f"invalid signature: {reason}"),
+        )
 
     payload = await request.json()
     event_id = x_psp_event_id or payload.get("id") or payload.get("event_id")
     if not event_id:
-        event_id = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response("MISSING_EVENT_ID", "Webhook event_id is required."),
+        )
 
     kind = payload.get("type") or payload.get("event") or "unknown"
     psp_ref = x_psp_ref or payload.get("psp_ref") or payload.get("payment_reference")

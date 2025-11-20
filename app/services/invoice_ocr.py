@@ -99,6 +99,38 @@ def _normalize_invoice_ocr(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in normalized.items() if v is not None}
 
 
+def normalize_invoice_metadata(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize invoice amount/currency and surface errors explicitly.
+
+    This helper is used by OCR enrichment *and* user-provided metadata to
+    guarantee a single source of truth for typed invoice fields.
+    """
+
+    out: dict[str, Any] = {}
+    errors: list[str] = []
+
+    raw_amount = raw.get("invoice_total_amount") or raw.get("total") or raw.get("total_amount")
+    if raw_amount is not None:
+        try:
+            out["invoice_total_amount"] = Decimal(str(raw_amount))
+        except (TypeError, InvalidOperation, ValueError):
+            out["invoice_total_amount"] = None
+            errors.append("invalid_invoice_total_amount")
+
+    raw_currency = (raw.get("invoice_currency") or raw.get("currency") or "").strip().upper()
+    if raw_currency:
+        if len(raw_currency) == 3 and raw_currency.isalpha():
+            out["invoice_currency"] = raw_currency
+        else:
+            out["invoice_currency"] = None
+            errors.append("invalid_invoice_currency")
+
+    if errors:
+        out["normalization_errors"] = errors
+
+    return out
+
+
 def normalize_invoice_amount_and_currency(
     metadata: Dict[str, Any],
 ) -> Tuple[Optional[Decimal], Optional[str]]:
@@ -109,23 +141,8 @@ def normalize_invoice_amount_and_currency(
     - Currency must be a 3-letter uppercase code, otherwise None.
     """
 
-    raw_amount = metadata.get("invoice_total_amount") or metadata.get("total_amount")
-    raw_currency = metadata.get("invoice_currency") or metadata.get("currency")
-
-    amount_dec: Optional[Decimal] = None
-    if raw_amount is not None:
-        try:
-            amount_dec = Decimal(str(raw_amount)).quantize(Decimal("0.01"))
-        except (InvalidOperation, TypeError, ValueError):
-            amount_dec = None
-
-    currency_norm: Optional[str] = None
-    if isinstance(raw_currency, str):
-        code = raw_currency.strip().upper()
-        if len(code) == 3 and code.isalpha():
-            currency_norm = code
-
-    return amount_dec, currency_norm
+    normalized = normalize_invoice_metadata(metadata)
+    return normalized.get("invoice_total_amount"), normalized.get("invoice_currency")
 
 
 def enrich_metadata_with_invoice_ocr(

@@ -5,6 +5,7 @@ import pytest
 from app.services.invoice_ocr import (
     enrich_metadata_with_invoice_ocr,
     normalize_invoice_amount_and_currency,
+    normalize_invoice_metadata,
 )
 
 
@@ -109,3 +110,12 @@ def test_normalize_invoice_amount_and_currency_invalid_values():
 
     assert amount is None
     assert currency is None
+
+
+def test_normalize_invoice_metadata_surfaces_errors():
+    normalized = normalize_invoice_metadata({"invoice_total_amount": "oops", "invoice_currency": "usd4"})
+
+    assert normalized["invoice_total_amount"] is None
+    assert normalized["invoice_currency"] is None
+    assert "invalid_invoice_total_amount" in normalized.get("normalization_errors", [])
+    assert "invalid_invoice_currency" in normalized.get("normalization_errors", [])
