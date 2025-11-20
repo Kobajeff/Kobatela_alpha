@@ -58,22 +58,30 @@ def _validate_psp_timestamp(ts_seconds: int, secrets_info: Mapping[str, str | No
         )
 
 
+def _cleanup_recent_psp_events(now: int) -> None:
+    cutoff = now - _RECENT_PSP_EVENTS_TTL_SECONDS
+    for eid, seen_ts in list(_recent_psp_events.items()):
+        if seen_ts < cutoff:
+            _recent_psp_events.pop(eid, None)
+
+
 def _is_recent_replay(event_id: str | None, ts_seconds: int) -> bool:
     if not event_id:
         return False
 
     now = ts_seconds or int(time.time())
-    cutoff = now - _RECENT_PSP_EVENTS_TTL_SECONDS
+    _cleanup_recent_psp_events(now)
 
-    for eid, seen_ts in list(_recent_psp_events.items()):
-        if seen_ts < cutoff:
-            _recent_psp_events.pop(eid, None)
+    return event_id in _recent_psp_events
 
-    if event_id in _recent_psp_events:
-        return True
 
+def remember_successful_psp_event(event_id: str | None, ts_seconds: int) -> None:
+    if not event_id:
+        return
+
+    now = ts_seconds or int(time.time())
+    _cleanup_recent_psp_events(now)
     _recent_psp_events[event_id] = now
-    return False
 
 
 def _masked_secret_status(secrets_info: Mapping[str, str | None]) -> dict[str, str | None]:
@@ -265,6 +273,7 @@ def handle_event(
     event.processed_at = utcnow()
     db.add(event)
     db.commit()
+    remember_successful_psp_event(event_id, int(event.processed_at.timestamp()))
     db.refresh(event)
     logger.info(
         "PSP webhook processed",
