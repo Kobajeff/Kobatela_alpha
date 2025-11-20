@@ -1,20 +1,107 @@
 """Invoice OCR enrichment helpers."""
 from __future__ import annotations
 
-import logging
-import time
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Protocol
+
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.config import get_settings
+from app.core.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
 _OCR_CALLS_TOTAL = 0
 _OCR_ERRORS_TOTAL = 0
 
 
-def _current_settings():
-    return get_settings()
+class InvoiceOCRResult(BaseModel):
+    """
+    Normalized OCR result for an invoice-like document.
+
+    This is the internal contract for what the OCR layer is allowed to return.
+    All providers MUST conform to this schema.
+    """
+
+    ocr_status: str = Field(..., description="Overall OCR status, e.g. 'disabled', 'success', 'error'")
+    ocr_provider: Optional[str] = Field(default=None, description="Provider identifier, e.g. 'dummy', 'openai'")
+    total_amount: Optional[Decimal] = Field(default=None, description="Total amount detected on invoice")
+    currency: Optional[str] = Field(default=None, description="3-letter currency code, if detected", min_length=3, max_length=3)
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    iban_last4: Optional[str] = None
+    supplier_name: Optional[str] = None
+
+    @field_validator("total_amount")
+    @classmethod
+    def _validate_amount(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is None:
+            return value
+
+        try:
+            decimal_value = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("Invalid total_amount") from exc
+        return decimal_value
+
+    @field_validator("currency")
+    @classmethod
+    def _validate_currency(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+
+        normalized = value.strip().upper()
+        if len(normalized) != 3 or not normalized.isalpha():
+            raise ValueError("Currency must be a 3-letter code")
+        return normalized
+
+    @field_validator("iban_last4")
+    @classmethod
+    def _validate_iban_last4(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        trimmed = value.strip()
+        if len(trimmed) != 4:
+            raise ValueError("IBAN last 4 must be exactly 4 characters")
+        return trimmed
+
+
+class OCRProvider(Protocol):
+    """Protocol for OCR providers."""
+
+    def extract(self, file_bytes: bytes) -> Dict[str, Any]:
+        """
+        Perform OCR on the given document bytes and return a raw dict.
+
+        The raw dict will be validated and normalized via InvoiceOCRResult.
+        Implementations may return extra keys; only allowed/known keys
+        will be preserved by the Pydantic model.
+        """
+        ...
+
+
+@dataclass
+class DummyOCRProvider:
+    """No-op provider used when OCR is disabled or not configured."""
+
+    name: str = "dummy"
+
+    def extract(self, file_bytes: bytes) -> Dict[str, Any]:
+        # Minimal contract: always returns an object that can be validated.
+        return {
+            "ocr_status": "disabled",
+            "ocr_provider": self.name,
+            "total_amount": None,
+            "currency": None,
+        }
+
+
+_OCR_PROVIDERS: Dict[str, OCRProvider] = {
+    "dummy": DummyOCRProvider(),
+    # Future: "openai": OpenAIOCRProvider(...),
+    # Future: "tesseract": TesseractOCRProvider(...),
+}
 
 
 def _record_ocr_success() -> None:
@@ -38,86 +125,96 @@ def get_ocr_stats() -> Dict[str, int]:
 def invoice_ocr_enabled() -> bool:
     """Return True if the invoice OCR feature is enabled."""
 
-    return bool(getattr(_current_settings(), "INVOICE_OCR_ENABLED", False))
+    return bool(getattr(get_settings(), "INVOICE_OCR_ENABLED", False))
 
 
-def _call_external_ocr_provider(storage_url: str) -> Dict[str, Any]:
-    """Call the configured OCR provider and return raw data.
-
-    This is a stub for now; future phases will plug a real provider (Mindee, Tabscanner...).
+def get_ocr_provider() -> OCRProvider:
+    """
+    Pick the OCR provider based on settings.
+    For now, returns 'dummy' if OCR is disabled or no provider configured.
     """
 
-    provider = getattr(_current_settings(), "INVOICE_OCR_PROVIDER", "none")
+    settings = get_settings()
+    provider_name = getattr(settings, "INVOICE_OCR_PROVIDER", "dummy")
 
-    if provider == "none":
-        return {}
+    provider = _OCR_PROVIDERS.get(provider_name)
+    if not provider:
+        logger.warning(
+            "Unknown OCR provider configured; falling back to dummy",
+            extra={"provider": provider_name},
+        )
+        provider = _OCR_PROVIDERS["dummy"]
+    return provider
 
-    # Example placeholder for future integrations.
-    logger.warning("Invoice OCR provider '%s' not implemented, returning empty result.", provider)
-    return {}
+
+def normalize_ocr_result(raw: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    Validate and normalize a raw OCR output into a canonical dict
+    based on InvoiceOCRResult.
+
+    - Uses Pydantic for validation/coercion.
+    - On validation error, returns a safe 'error' structure.
+    """
+
+    try:
+        model = InvoiceOCRResult.model_validate(raw)
+        return model.model_dump()
+    except ValidationError as exc:
+        logger.warning(
+            "Invoice OCR result failed validation; returning error structure",
+            extra={"errors": exc.errors()},
+        )
+        return {
+            "ocr_status": "error",
+            "ocr_provider": raw.get("ocr_provider") or "unknown",
+            "total_amount": None,
+            "currency": None,
+            "invoice_number": None,
+            "invoice_date": None,
+            "iban_last4": None,
+            "supplier_name": None,
+        }
 
 
-def _normalize_invoice_ocr(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize raw OCR output into canonical invoice metadata keys."""
+def run_invoice_ocr_if_enabled(file_bytes: bytes) -> Dict[str, Any]:
+    """
+    High-level OCR entry point used by proofs.submit_proof.
 
-    if not raw:
-        return {}
+    - If OCR is disabled in settings, returns a canonical 'disabled' result.
+    - If enabled, delegates to the configured provider and normalizes the result.
+    """
 
-    normalized: Dict[str, Any] = {}
+    settings = get_settings()
+    if not getattr(settings, "INVOICE_OCR_ENABLED", False):
+        _record_ocr_success()
+        return InvoiceOCRResult(
+            ocr_status="disabled",
+            ocr_provider="disabled",
+            total_amount=None,
+            currency=None,
+        ).model_dump()
 
-    total_raw = raw.get("total_amount") or raw.get("amount")
-    normalized["invoice_total_raw"] = total_raw
+    provider = get_ocr_provider()
+    try:
+        raw = provider.extract(file_bytes)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "Invoice OCR provider call failed", extra={"provider": getattr(provider, "name", None)}
+        )
+        _record_ocr_error()
+        return InvoiceOCRResult(
+            ocr_status="error",
+            ocr_provider=getattr(provider, "name", "unknown"),
+            total_amount=None,
+            currency=None,
+        ).model_dump()
 
-    total_dec: Decimal | None = None
-    if total_raw is not None:
-        try:
-            total_dec = Decimal(str(total_raw)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        except (InvalidOperation, TypeError, ValueError):
-            total_dec = None
-
-    if total_dec is not None:
-        normalized["invoice_total_amount"] = total_dec
-
-    currency = raw.get("currency") or raw.get("invoice_currency")
-    if currency:
-        normalized["invoice_currency"] = str(currency).upper()
-
-    date_value = raw.get("invoice_date") or raw.get("date")
-    if date_value:
-        normalized["invoice_date"] = str(date_value)
-
-    invoice_number = raw.get("invoice_number")
-    if invoice_number:
-        normalized["invoice_number"] = str(invoice_number)
-
-    supplier_name = raw.get("supplier_name") or raw.get("merchant_name")
-    if supplier_name:
-        normalized["invoice_supplier_name"] = str(supplier_name)
-        normalized.setdefault("supplier_name", str(supplier_name))
-
-    supplier_country = raw.get("supplier_country") or raw.get("country")
-    if supplier_country:
-        normalized["invoice_supplier_country"] = str(supplier_country)
-        normalized.setdefault("supplier_country", str(supplier_country))
-
-    supplier_city = raw.get("supplier_city") or raw.get("city")
-    if supplier_city:
-        normalized["invoice_supplier_city"] = str(supplier_city)
-        normalized.setdefault("supplier_city", str(supplier_city))
-
-    iban = raw.get("iban") or raw.get("bank_account")
-    if isinstance(iban, str):
-        iban_clean = iban.replace(" ", "")
-        if iban_clean:
-            last4 = iban_clean[-4:]
-            normalized["invoice_iban_last4"] = last4
-            normalized.setdefault("iban_last4", last4)
-            if len(iban_clean) >= 4:
-                masked = f"****{last4}"
-                normalized["invoice_iban_masked"] = masked
-                normalized.setdefault("iban_full_masked", masked)
-
-    return {k: v for k, v in normalized.items() if v is not None}
+    normalized = normalize_ocr_result(raw)
+    if normalized.get("ocr_status") == "error":
+        _record_ocr_error()
+    else:
+        _record_ocr_success()
+    return normalized
 
 
 def normalize_invoice_metadata(raw: dict[str, Any]) -> dict[str, Any]:
@@ -144,7 +241,7 @@ def normalize_invoice_metadata(raw: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_invoice_amount_and_currency(
     metadata: Dict[str, Any],
-) -> Tuple[Optional[Decimal], Optional[str], list[str]]:
+) -> tuple[Optional[Decimal], Optional[str], list[str]]:
     """Normalize invoice amount and currency without raising.
 
     Returns ``(amount, currency, errors)`` where errors is a list of
@@ -178,65 +275,32 @@ def enrich_metadata_with_invoice_ocr(
     *,
     storage_url: str,
     existing_metadata: Dict[str, Any] | None,
+    file_bytes: bytes | None = None,
 ) -> Dict[str, Any]:
     """Enrich metadata with OCR info without overwriting user-supplied values."""
 
-    start = time.monotonic()
-    status = "success"
-    provider = None
     metadata = dict(existing_metadata or {})
-    provider = getattr(_current_settings(), "INVOICE_OCR_PROVIDER", "none")
+    ocr_result = run_invoice_ocr_if_enabled(file_bytes or b"")
 
-    if not invoice_ocr_enabled():
-        status = "skipped"
-        logger.info("Invoice OCR disabled; skipping enrichment for %s", storage_url)
-        metadata["ocr_status"] = "disabled"
-        metadata["ocr_provider"] = provider
-        _record_ocr_success()
-        return metadata
+    metadata.setdefault("ocr_status", ocr_result.get("ocr_status"))
+    metadata.setdefault("ocr_provider", ocr_result.get("ocr_provider"))
 
-    try:
-        raw = _call_external_ocr_provider(storage_url)
-        normalized = _normalize_invoice_ocr(raw)
+    if "total_amount" in ocr_result and metadata.get("invoice_total_amount") is None:
+        metadata["invoice_total_amount"] = ocr_result.get("total_amount")
+    if "currency" in ocr_result and metadata.get("invoice_currency") is None:
+        metadata["invoice_currency"] = ocr_result.get("currency")
 
-        if "invoice_total_amount" in normalized:
-            if "invoice_total_amount" not in metadata:
-                metadata["invoice_total_amount"] = normalized["invoice_total_amount"]
-            else:
-                metadata.setdefault("ocr", {})["invoice_total_amount"] = normalized["invoice_total_amount"]
+    metadata.setdefault("ocr_raw", {})
+    metadata["ocr_raw"].update(ocr_result)
 
-        if "invoice_currency" in normalized:
-            if "invoice_currency" not in metadata:
-                metadata["invoice_currency"] = normalized["invoice_currency"]
-            else:
-                metadata.setdefault("ocr", {})["invoice_currency"] = normalized["invoice_currency"]
+    logger.info(
+        "Invoice OCR enrichment completed",
+        extra={
+            "storage_url": storage_url,
+            "ocr_status": ocr_result.get("ocr_status"),
+            "ocr_provider": ocr_result.get("ocr_provider"),
+        },
+    )
 
-        for key, value in normalized.items():
-            if key in {"invoice_total_amount", "invoice_currency"}:
-                continue
-            if key not in metadata:
-                metadata[key] = value
+    return metadata
 
-        metadata["ocr_status"] = "success"
-        metadata["ocr_provider"] = provider
-        _record_ocr_success()
-        return metadata
-
-    except Exception as exc:  # noqa: BLE001
-        status = "error"
-        logger.exception("Invoice OCR failed for %s: %s", storage_url, exc)
-        metadata["ocr_status"] = "error"
-        metadata["ocr_provider"] = provider
-        _record_ocr_error()
-        return metadata
-    finally:
-        duration = time.monotonic() - start
-        logger.info(
-            "Invoice OCR enrichment completed",
-            extra={
-                "status": status,
-                "duration_seconds": duration,
-                "provider": provider,
-                "storage_url": storage_url,
-            },
-        )

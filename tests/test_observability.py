@@ -19,18 +19,16 @@ def test_ai_proof_advisor_logs_status(monkeypatch):
 def test_invoice_ocr_logs_status(monkeypatch):
     from app.services import invoice_ocr
 
-    class DummySettings:
-        INVOICE_OCR_PROVIDER = "none"
-
-    monkeypatch.setattr(invoice_ocr, "_current_settings", lambda: DummySettings())
-    monkeypatch.setattr(invoice_ocr, "invoice_ocr_enabled", lambda: False)
+    settings = invoice_ocr.get_settings()
+    monkeypatch.setattr(settings, "INVOICE_OCR_ENABLED", False, raising=False)
+    monkeypatch.setattr(settings, "INVOICE_OCR_PROVIDER", "none", raising=False)
 
     metadata = invoice_ocr.enrich_metadata_with_invoice_ocr(
-        storage_url="test://file.pdf", existing_metadata={}
+        storage_url="test://file.pdf", existing_metadata={}, file_bytes=b""
     )
 
     assert metadata["ocr_status"] == "disabled"
-    assert metadata["ocr_provider"] == "none"
+    assert metadata["ocr_provider"] == "disabled"
 
 
 def test_ai_circuit_breaker_skips_when_open(monkeypatch):

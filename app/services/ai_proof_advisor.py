@@ -14,7 +14,11 @@ from typing import Any, Dict, List, Optional
 
 from app.config import get_settings
 from app.services.ai_proof_flags import ai_enabled, ai_model, ai_timeout_seconds
-from app.utils.masking import mask_metadata_for_ai
+from app.utils.masking import (
+    AI_MASK_PLACEHOLDER,
+    SENSITIVE_PATTERNS,
+    mask_metadata_for_ai,
+)
 
 # Simple in-memory circuit breaker + metrics for AI Proof Advisor
 _AI_FAILURE_COUNT: int = 0
@@ -268,6 +272,30 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
         "flags": flags,
         "explanation": explanation,
     }
+
+
+def _mask_sensitive_only(data: dict[str, Any]) -> dict[str, Any]:
+    """Mask sensitive keys but keep non-sensitive fields intact."""
+
+    if not isinstance(data, dict):
+        return {}
+
+    cleaned: dict[str, Any] = {}
+    redacted_keys: list[str] = []
+
+    for key, value in data.items():
+        key_lower = str(key).lower()
+
+        if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
+            cleaned[key] = AI_MASK_PLACEHOLDER
+            redacted_keys.append(key)
+        else:
+            cleaned[key] = value
+
+    if redacted_keys:
+        cleaned["_ai_redacted_keys"] = redacted_keys
+
+    return cleaned
 
 
 def _sanitize_context(context: dict) -> dict:
