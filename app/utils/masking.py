@@ -111,15 +111,18 @@ def mask_proof_metadata(metadata: Mapping[str, Any] | None) -> Mapping[str, Any]
     return _mask_mapping(metadata)
 
 
+AI_MASK_PLACEHOLDER = "***redacted***"
+
+# Allowlist stricte de ce qui peut être envoyé à OpenAI
 AI_ALLOWED_METADATA_KEYS = {
     "invoice_total_amount",
     "invoice_currency",
     "invoice_number",
     "invoice_date",
+    "supplier_country",
+    "supplier_city",
     "beneficiary_city",
     "beneficiary_country",
-    "supplier_city",
-    "supplier_country",
     "gps_lat",
     "gps_lng",
     "gps_accuracy_m",
@@ -131,49 +134,46 @@ AI_ALLOWED_METADATA_KEYS = {
     "ocr_provider",
 }
 
+# Patterns sensibles (IBAN, mail, phone, address, identifiers…)
 SENSITIVE_PATTERNS = (
     "iban",
     "account",
-    "acct",
     "email",
     "phone",
     "tel",
-    "mobile",
-    "address",
     "addr",
     "ssn",
     "nif",
-    "id_number",
+    "id_",
+    "ident",
     "passport",
 )
 
-AI_MASK_PLACEHOLDER = "***redacted***"
 
-
-def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Whitelist + redaction for AI privacy (deny by default).
-
-    - Only allowlisted keys pass through unchanged (with currency upper-cased).
-    - Sensitive keys are masked et marquées côté logs.
-    - Unknown keys sont ignorées (non envoyées à l'IA) mais loggées côté serveur.
+def mask_metadata_for_ai(metadata):
     """
+    Apply strict privacy rules before sending metadata to OpenAI.
 
-    if not isinstance(metadata, Mapping):
+    - Allowed keys → pass through unchanged.
+    - Sensitive keys → replaced by placeholder (***redacted***).
+    - Unknown keys → removed from context but tracked in _ai_redacted_keys.
+    """
+    if not isinstance(metadata, dict):
         return {}
 
-    cleaned: dict[str, Any] = {}
-    redacted_keys: list[str] = []
+    cleaned = {}
+    redacted_keys = []
 
     for key, value in metadata.items():
         key_lower = key.lower()
 
-        # 1) Sensitive → kept but masked
+        # 1) Sensitive → mask
         if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
             cleaned[key] = AI_MASK_PLACEHOLDER
             redacted_keys.append(key)
             continue
 
-        # 2) Explicitly allowed → pass-through (currency uppercased)
+        # 2) Allowed → keep
         if key_lower in AI_ALLOWED_METADATA_KEYS:
             if key_lower == "invoice_currency" and isinstance(value, str):
                 cleaned[key] = value.upper()
@@ -181,16 +181,12 @@ def mask_metadata_for_ai(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
                 cleaned[key] = value
             continue
 
-        # 3) Unknown → dropped, but logged
+        # 3) Unknown key → drop + log in special field
         redacted_keys.append(key)
 
     if redacted_keys:
-        logger.debug(
-            "AI metadata keys redacted/dropped by mask_metadata_for_ai",
-            extra={"keys": redacted_keys},
-        )
+        cleaned["_ai_redacted_keys"] = redacted_keys
 
-    # Critical: DO NOT include _ai_redacted_keys in cleaned
     return cleaned
 
 
