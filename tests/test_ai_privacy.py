@@ -95,6 +95,28 @@ def test_ai_preserves_backend_and_mandate_signals():
     assert cleaned["backend_checks"]["duplicate_hash"] == "abc123"
     assert cleaned["mandate_context"]["mandate_amount"] == 2500
     assert cleaned["mandate_context"]["mandate_currency"] == "EUR"
+
+
+def test_ai_drops_unexpected_mandate_and_backend_fields():
+    ctx = {
+        "backend_checks": {
+            "distance": 42,
+            "raw_storage_url": "https://secret-storage",
+            "geofence_configured": True,
+        },
+        "mandate_context": {
+            "mandate_amount": 99,
+            "escrow_id": "escrow-1234",
+            "milestone_label": "Very sensitive label",
+        },
+        "document_context": {"metadata": {}},
+    }
+
+    cleaned = _sanitize_context(ctx)
+
+    assert "raw_storage_url" not in cleaned["backend_checks"]
+    assert "escrow_id" not in cleaned["mandate_context"]
+    assert "milestone_label" not in cleaned["mandate_context"]
 def test_mask_metadata_for_ai_logs_redacted_keys():
     metadata = {
         "invoice_total_amount": 100,

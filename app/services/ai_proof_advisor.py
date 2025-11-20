@@ -273,18 +273,54 @@ def _normalize_ai_result(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _mask_sensitive_only(data: dict[str, Any]) -> dict[str, Any]:
-    """Mask sensitive keys but keep non-sensitive fields intact."""
+MANDATE_CONTEXT_ALLOWED_KEYS = {
+    "mandate_amount",
+    "mandate_currency",
+    "milestone_amount",
+    "milestone_idx",
+    "beneficiary_iban",
+    "email",
+    "proof_type",
+    "invoice_total_amount",
+    "invoice_currency",
+}
+
+BACKEND_CHECKS_ALLOWED_KEYS = {
+    "has_metadata",
+    "geofence_configured",
+    "validation_ok",
+    "validation_reason",
+    "distance",
+    "date_diff_days",
+    "duplicate_hash",
+    "phone_number",
+    "address",
+    "amount_check",
+    "iban_check",
+    "date_check",
+    "supplier_check",
+}
+
+
+def _mask_and_filter(data: dict[str, Any], allowed_keys: set[str]) -> dict[str, Any]:
+    """Mask sensitive keys and drop anything not explicitly allowlisted."""
 
     if not isinstance(data, dict):
         return {}
 
     cleaned: dict[str, Any] = {}
     redacted_keys: list[str] = []
+    allowed_lower = {key.lower() for key in allowed_keys}
 
     for key, value in data.items():
         key_lower = str(key).lower()
 
+        # Drop anything not explicitly allowed
+        if key_lower not in allowed_lower:
+            redacted_keys.append(key)
+            continue
+
+        # Mask sensitive patterns even if allowlisted
         if any(pattern in key_lower for pattern in SENSITIVE_PATTERNS):
             cleaned[key] = AI_MASK_PLACEHOLDER
             redacted_keys.append(key)
@@ -307,13 +343,13 @@ def _sanitize_context(context: dict) -> dict:
     if not isinstance(context, dict):
         return {}
 
-    # Mandate context → mask sensitive keys only
+    # Mandate context → strict allowlist + sensitive masking
     mandate = context.get("mandate_context") or {}
-    cleaned_mandate = _mask_sensitive_only(mandate)
+    cleaned_mandate = _mask_and_filter(mandate, MANDATE_CONTEXT_ALLOWED_KEYS)
 
-    # Backend checks → mask sensitive keys only
+    # Backend checks → strict allowlist + sensitive masking
     backend = context.get("backend_checks") or {}
-    cleaned_backend = _mask_sensitive_only(backend)
+    cleaned_backend = _mask_and_filter(backend, BACKEND_CHECKS_ALLOWED_KEYS)
 
     # Document context → strict metadata masking
     doc_ctx = context.get("document_context") or {}
