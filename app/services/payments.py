@@ -185,6 +185,25 @@ def execute_payout(
         if milestone:
             db.refresh(milestone)
         _handle_post_payment(db, payment)
+        db.add(
+            AuditLog(
+                actor="system",
+                action="PAYMENT_EXECUTED",
+                entity="Payment",
+                entity_id=payment.id,
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "escrow_id": payment.escrow_id,
+                        "milestone_id": payment.milestone_id,
+                        "amount": str(payment.amount),
+                        "idempotency_key": payment.idempotency_key,
+                        "psp_ref": payment.psp_ref,
+                    }
+                ),
+                at=utcnow(),
+            )
+        )
+        db.commit()
         logger.info(
             "Payout executed",
             extra={"payment_id": payment.id, "escrow_id": escrow.id, "status": payment.status.value},
@@ -263,13 +282,15 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
         db.add(
             AuditLog(
                 actor="system",
-                action="EXECUTE_PAYOUT",
+                action="PAYMENT_EXECUTED",
                 entity="Payment",
                 entity_id=payment.id,
                 data_json=sanitize_payload_for_audit(
                     {
                         "idempotency_key": payment.idempotency_key,
                         "amount": str(payment.amount),
+                        "escrow_id": payment.escrow_id,
+                        "milestone_id": payment.milestone_id,
                     }
                 ),
                 at=utcnow(),

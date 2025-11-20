@@ -27,11 +27,7 @@ from app.services import (
 from app.services.ai_proof_advisor import call_ai_proof_advisor
 from app.services.ai_proof_flags import ai_enabled
 from app.services.document_checks import compute_document_backend_checks
-from app.services.invoice_ocr import (
-    enrich_metadata_with_invoice_ocr,
-    normalize_invoice_amount_and_currency,
-    normalize_invoice_metadata,
-)
+from app.services.invoice_ocr import enrich_metadata_with_invoice_ocr, normalize_invoice_amount_and_currency
 from app.services.idempotency import get_existing_by_key
 from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
@@ -52,20 +48,20 @@ AI_PROOF_ENABLED: Final[bool] = os.getenv("KCT_AI_PROOF_ENABLED", "0") == "1"
 logger = logging.getLogger(__name__)
 
 
-def _json_safe_value(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {k: _json_safe_value(v) for k, v in value.items()}
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_json_safe_value(item) for item in value]
-    if isinstance(value, Decimal):
-        return str(value)
-    return value
-
-
-def _json_safe_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _sanitize_metadata_for_storage(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
     if metadata is None:
         return None
-    return {key: _json_safe_value(value) for key, value in dict(metadata).items()}
+
+    def _sanitize(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {k: _sanitize(v) for k, v in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [_sanitize(item) for item in value]
+        if isinstance(value, Decimal):
+            return str(value)
+        return value
+
+    return {key: _sanitize(value) for key, value in dict(metadata).items()}
 
 
 def submit_proof(
@@ -88,22 +84,17 @@ def submit_proof(
     metadata_payload.pop("ai_assessment", None)
     ai_result: dict[str, Any] | None = None
 
-    invoice_total_amount: Decimal | None = None
-    invoice_currency: str | None = None
-
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
         metadata_payload = enrich_metadata_with_invoice_ocr(
             storage_url=payload.storage_url,
             existing_metadata=metadata_payload,
         )
 
-    normalization = normalize_invoice_metadata(metadata_payload)
-    for key, value in normalization.items():
-        if key == "normalization_errors":
-            continue
-        metadata_payload[key] = value
+    metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
 
-    norm_errors = normalization.get("normalization_errors") or []
+    invoice_total_amount, invoice_currency, norm_errors = normalize_invoice_amount_and_currency(
+        metadata_payload
+    )
     if norm_errors:
         logger.warning(
             "Invoice normalization errors on proof submission",
@@ -117,14 +108,11 @@ def submit_proof(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=error_response(
                 "INVOICE_NORMALIZATION_ERROR",
-                "Invoice amount or currency is invalid.",
+                "Les données de montant ou de devise de la facture sont invalides.",
             ),
         )
 
-    invoice_total_amount, invoice_currency = normalize_invoice_amount_and_currency(
-        metadata_payload
-    )
-    metadata_payload = _json_safe_metadata(metadata_payload) or {}
+    metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
     review_reason: str | None = None
     auto_approve = False
 
@@ -356,7 +344,7 @@ def submit_proof(
     if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
         db.add(
             AuditLog(
-                actor="system:invoice_ocr",
+                actor="invoice_ocr",
                 action="INVOICE_OCR_RUN",
                 entity="Proof",
                 entity_id=proof.id,
@@ -375,8 +363,8 @@ def submit_proof(
     if ai_result:
         db.add(
             AuditLog(
-                actor="system:ai_proof_advisor",
-                action="AI_PROOF_ANALYSIS",
+                actor="ai_proof_advisor",
+                action="AI_PROOF_ASSESSMENT",
                 entity="Proof",
                 entity_id=proof.id,
                 data_json=sanitize_payload_for_audit(
@@ -384,8 +372,9 @@ def submit_proof(
                         "escrow_id": payload.escrow_id,
                         "milestone_id": milestone.id,
                         "proof_type": payload.type,
-                        "ai_flags": ai_result.get("flags"),
-                        "ai_risk_level": ai_result.get("risk_level"),
+                        "risk_level": ai_result.get("risk_level"),
+                        "score": ai_result.get("score"),
+                        "flags": ai_result.get("flags"),
                     }
                 ),
                 at=utcnow(),
