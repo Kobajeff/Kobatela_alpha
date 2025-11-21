@@ -121,6 +121,12 @@ def healthcheck() -> dict[str, object]:
         "psp_webhook_configured": bool(primary_secret or secondary_secret),
         "psp_webhook_secret_status": _secret_status(primary_secret, secondary_secret),
         "psp_webhook_secret_fingerprints": _psp_secret_fingerprints(settings),
+        "stripe": {
+            "enabled": bool(settings.STRIPE_ENABLED),
+            "connect_enabled": bool(settings.STRIPE_CONNECT_ENABLED),
+            "webhook_configured": bool(settings.STRIPE_WEBHOOK_SECRET),
+            "api_key_configured": bool(settings.STRIPE_SECRET_KEY),
+        },
         "ocr_enabled": bool(settings.INVOICE_OCR_ENABLED),
         "ai_proof_enabled": ai_enabled(),
         "ai_metrics": ai_stats,
