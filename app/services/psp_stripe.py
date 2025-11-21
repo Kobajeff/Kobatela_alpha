@@ -65,7 +65,7 @@ class StripeClient:
 
         return stripe.PaymentIntent.create(
             amount=_to_cents(amount),
-            currency=currency,
+            currency=currency.lower(),
             metadata=metadata,
         )
 
@@ -131,6 +131,12 @@ class StripeClient:
         """
 
         self._ensure_connect_enabled()
+        """Create a transfer to a connected account for a payout."""
+
+        if not self._connect_enabled:
+            raise RuntimeError(
+                "Stripe Connect is disabled; enable STRIPE_CONNECT_ENABLED to create transfers."
+            )
 
         metadata: Dict[str, Any] = {
             "escrow_id": str(escrow.id),
