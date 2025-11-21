@@ -2,7 +2,7 @@
 
 from alembic import op
 import sqlalchemy as sa
-
+from sqlalchemy import inspect
 
 # revision identifiers, used by Alembic.
 revision = "f00c2d7b2e3b"
