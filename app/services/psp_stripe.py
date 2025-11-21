@@ -9,7 +9,7 @@ import stripe
 from app.config import Settings, get_settings
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
-    from app.models import EscrowAgreement, Payment
+    from app.models import EscrowAgreement, Payment, User
 
 
 def _to_cents(amount: Decimal) -> int:
@@ -46,6 +46,12 @@ class StripeClient:
         if not self.settings.STRIPE_ENABLED:
             raise RuntimeError("Stripe integration is disabled; enable STRIPE_ENABLED to proceed.")
 
+    def _ensure_connect_enabled(self) -> None:
+        if not self._connect_enabled:
+            raise RuntimeError(
+                "Stripe Connect is disabled; enable STRIPE_CONNECT_ENABLED to create connected accounts or transfers."
+            )
+
     def create_funding_payment_intent(
         self, escrow: "EscrowAgreement", amount: Decimal, currency: str
     ) -> stripe.PaymentIntent:
@@ -73,6 +79,41 @@ class StripeClient:
 
         return stripe.Webhook.construct_event(payload, sig_header, self._webhook_secret)
 
+    def create_connected_account(self, user: "User") -> stripe.Account:
+        """Create a Stripe Connect Express account using the user's details where available.
+
+        Falls back to ``FR`` as the country when none is provided and requests transfers
+        capability for payouts.
+        """
+
+        self._ensure_connect_enabled()
+
+        email = getattr(user, "email", None)
+        country = getattr(user, "country", None) or "FR"
+
+        return stripe.Account.create(
+            type="express",
+            country=country,
+            email=email,
+            capabilities={"transfers": {"requested": True}},
+            metadata={"user_id": str(getattr(user, "id", ""))},
+        )
+
+    def create_account_link(self, account_id: str) -> stripe.AccountLink:
+        """Create an onboarding account link for a connected account using placeholder URLs."""
+
+        self._ensure_connect_enabled()
+
+        refresh_url = "https://app.kobatela.com/stripe/onboarding/refresh"
+        return_url = "https://app.kobatela.com/stripe/onboarding/return"
+
+        return stripe.AccountLink.create(
+            account=account_id,
+            refresh_url=refresh_url,
+            return_url=return_url,
+            type="account_onboarding",
+        )
+
     def create_transfer_to_connected(
         self,
         *,
@@ -82,6 +123,14 @@ class StripeClient:
         amount: Decimal,
         currency: str,
     ) -> stripe.Transfer:
+        """Create a Transfer from the platform balance to a connected account.
+
+        The ``amount`` is expressed in major units and is converted to the smallest
+        unit for Stripe. Metadata includes escrow, payment, and optional milestone
+        identifiers for traceability.
+        """
+
+        self._ensure_connect_enabled()
         """Create a transfer to a connected account for a payout."""
 
         if not self._connect_enabled:
@@ -93,6 +142,9 @@ class StripeClient:
             "escrow_id": str(escrow.id),
             "payment_id": str(payment.id),
         }
+
+        if getattr(payment, "milestone_id", None) is not None:
+            metadata["milestone_id"] = str(payment.milestone_id)
 
         return stripe.Transfer.create(
             amount=_to_cents(amount),
