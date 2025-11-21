@@ -101,7 +101,7 @@ async def test_funding_session_creates_record_when_stripe_enabled(
     response = await client.post(
         f"/escrows/{escrow_id}/funding-session", headers=sender_headers
     )
-    assert response.status_code == 200, response.text
+    assert response.status_code == 201, response.text
     data = response.json()
     assert data["client_secret"] == "pi_client_secret"
 
