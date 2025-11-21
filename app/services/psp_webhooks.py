@@ -20,6 +20,7 @@ from app.models.payment import Payment, PaymentStatus
 from app.models.psp_webhook import PSPWebhookEvent
 from app.models.audit import AuditLog
 from app.services import funding as funding_service
+from app.services import payments as payments_service
 from app.services.payments import finalize_payment_settlement
 from app.services.psp_stripe import StripeClient
 from app.utils.audit import sanitize_payload_for_audit
@@ -124,6 +125,22 @@ async def handle_stripe_webhook(request: Request, db: Session) -> dict[str, bool
         logger.info("Stripe payment_intent.payment_failed", extra={"pi_id": pi_id})
         if pi_id:
             funding_service.mark_funding_failed(db, stripe_payment_intent_id=pi_id)
+    elif event_type == "transfer.failed":
+        transfer = event["data"]["object"]
+        metadata = transfer.get("metadata") or {}
+        payment_id = metadata.get("payment_id")
+
+        logger.info(
+            "Stripe transfer.failed received",
+            extra={"payment_id": payment_id, "transfer_id": transfer.get("id")},
+        )
+
+        if payment_id:
+            payments_service.mark_failed_from_psp(
+                db,
+                payment_id=payment_id,
+                external_error=transfer.get("failure_message"),
+            )
     elif event_type.startswith("transfer.") or event_type.startswith("payout."):
         logger.info("Stripe payout/transfer event received", extra={"event_type": event_type})
         # Placeholder: integrate with settlement logic when required.

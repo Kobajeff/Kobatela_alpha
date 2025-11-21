@@ -296,6 +296,56 @@ def _handle_post_payment(db: Session, payment: Payment) -> None:
 
     _finalize_escrow_if_paid(db, payment.escrow_id)
 
+
+def mark_failed_from_psp(
+    db: Session,
+    *,
+    payment_id: int | str,
+    external_error: str | None = None,
+) -> Payment | None:
+    """Mark a payment as failed based on PSP feedback."""
+
+    try:
+        pid = int(payment_id)
+    except (TypeError, ValueError):
+        logger.warning("Invalid payment_id in PSP failure payload", extra={"payment_id": payment_id})
+        return None
+
+    payment = db.get(Payment, pid)
+    if payment is None:
+        logger.info("PSP reported failure for unknown payment", extra={"payment_id": pid})
+        return None
+
+    if payment.status == PaymentStatus.ERROR:
+        logger.info("Payment already marked as error", extra={"payment_id": payment.id})
+        return payment
+
+    previous_status = payment.status
+    payment.status = PaymentStatus.ERROR
+
+    db.add(
+        AuditLog(
+            actor="psp",
+            action="PAYMENT_FAILED",
+            entity="Payment",
+            entity_id=payment.id,
+            data_json=sanitize_payload_for_audit(
+                {
+                    "psp_ref": payment.psp_ref,
+                    "external_error": external_error,
+                    "previous_status": getattr(previous_status, "value", str(previous_status)),
+                }
+            ),
+            at=utcnow(),
+        )
+    )
+
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+    logger.info("Payment marked as error from PSP webhook", extra={"payment_id": payment.id})
+    return payment
+
 def execute_payment(db: Session, payment_id: int) -> Payment:
     """Execute a payment entity via the public endpoint."""
 
@@ -489,4 +539,10 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
             )
             db.commit()
 
-__all__ = ["available_balance", "execute_payment", "execute_payout", "finalize_payment_settlement"]
+__all__ = [
+    "available_balance",
+    "execute_payment",
+    "execute_payout",
+    "finalize_payment_settlement",
+    "mark_failed_from_psp",
+]
