@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import (
     AuditLog,
     EscrowAgreement,
@@ -20,6 +21,7 @@ from app.models import (
     Payment,
     PaymentStatus,
 )
+from app.services.psp_stripe import StripeClient
 from app.services.idempotency import get_existing_by_key
 from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
@@ -61,6 +63,74 @@ def available_balance(db: Session, escrow_id: int) -> Decimal:
     """Return the remaining balance available for payouts on the escrow."""
 
     return _sum_deposits(db, escrow_id) - _sum_payments(db, escrow_id)
+
+
+def _send_payout_via_psp(
+    db: Session,
+    *,
+    payment: Payment,
+    escrow: EscrowAgreement,
+    milestone: Optional[Milestone],
+) -> None:
+    """Send a payout through the configured PSP.
+
+    When Stripe is disabled or incomplete, we preserve the existing stub PSP behaviour
+    to avoid breaking flows. If Stripe is enabled and a destination account is
+    available, we attempt a Connect transfer and store the external reference. On
+    errors, we fallback to the stub path for now (MVP behaviour).
+    """
+
+    settings = get_settings()
+
+    def _fallback_stub() -> None:
+        payment.psp_ref = payment.psp_ref or f"PSP-{uuid4()}"
+        payment.status = PaymentStatus.SENT
+        if milestone:
+            milestone.status = MilestoneStatus.PAID
+
+    if not settings.STRIPE_ENABLED:
+        _fallback_stub()
+        return
+
+    try:
+        stripe_client = StripeClient(settings)
+    except RuntimeError as exc:  # misconfiguration or disabled
+        logger.warning(
+            "Stripe enabled but unavailable; falling back to stub payout",
+            extra={"payment_id": payment.id, "escrow_id": escrow.id, "error": str(exc)},
+        )
+        _fallback_stub()
+        return
+
+    destination_account_id = getattr(escrow, "provider_stripe_account_id", None)
+    if not destination_account_id:
+        logger.info(
+            "Stripe enabled but destination account missing; using stub payout",
+            extra={"escrow_id": escrow.id, "payment_id": payment.id},
+        )
+        _fallback_stub()
+        return
+
+    try:
+        transfer = stripe_client.create_transfer_to_connected(
+            escrow=escrow,
+            payment=payment,
+            destination_account_id=destination_account_id,
+            amount=payment.amount,
+            currency=escrow.currency,
+        )
+    except Exception:  # Stripe SDK failure
+        logger.exception(
+            "Stripe transfer failed; reverting to stub payout",
+            extra={"escrow_id": escrow.id, "payment_id": payment.id},
+        )
+        _fallback_stub()
+        return
+
+    payment.psp_ref = transfer.id
+    payment.status = PaymentStatus.SENT
+    if milestone:
+        milestone.status = MilestoneStatus.PAID
 
 def _escrow_available(db: Session, escrow_id: int) -> Decimal:
     """Dépôts confirmés – paiements déjà envoyés (statuts débitants)."""
@@ -116,9 +186,7 @@ def execute_payout(
         if existing.status == PaymentStatus.PENDING:
             if milestone and milestone.status not in (MilestoneStatus.PAID, MilestoneStatus.PAYING):
                 milestone.status = MilestoneStatus.PAYING
-            existing.status = PaymentStatus.SENT
-            if milestone:
-                milestone.status = MilestoneStatus.PAID
+            _send_payout_via_psp(db, payment=existing, escrow=escrow, milestone=milestone)
             db.commit()
             db.refresh(existing)
             if milestone:
@@ -162,6 +230,7 @@ def execute_payout(
     )
     try:
         db.add(payment)
+        db.flush()
         logger.info(
             "Payout initiated",
             extra={"escrow_id": escrow.id, "amount": str(amount), "milestone_id": getattr(milestone, "id", None)},
@@ -175,10 +244,7 @@ def execute_payout(
                 )
             milestone.status = MilestoneStatus.PAYING
 
-        payment.psp_ref = payment.psp_ref or f"PSP-{uuid4()}"
-        payment.status = PaymentStatus.SENT
-        if milestone:
-            milestone.status = MilestoneStatus.PAID
+        _send_payout_via_psp(db, payment=payment, escrow=escrow, milestone=milestone)
 
         db.commit()
         db.refresh(payment)
