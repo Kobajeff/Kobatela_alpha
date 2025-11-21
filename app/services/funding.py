@@ -99,6 +99,14 @@ def mark_funding_succeeded(
         )
         return funding
 
+    escrow_services.deposit(
+        db,
+        funding.escrow_id,
+        EscrowDepositCreate(amount=amount),
+        idempotency_key=f"stripe:{stripe_payment_intent_id}",
+        actor="system",
+    )
+
     funding.status = FundingStatus.SUCCEEDED
     db.add(
         AuditLog(
@@ -119,14 +127,6 @@ def mark_funding_succeeded(
     )
     db.commit()
     db.refresh(funding)
-
-    escrow_services.deposit(
-        db,
-        funding.escrow_id,
-        EscrowDepositCreate(amount=amount),
-        idempotency_key=f"stripe:{stripe_payment_intent_id}",
-        actor="system",
-    )
     logger.info(
         "Escrow funded via Stripe",
         extra={"funding_id": funding.id, "escrow_id": funding.escrow_id},
