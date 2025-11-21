@@ -7,6 +7,7 @@ from .audit import AuditLog
 from .base import Base
 from .certified import CertifiedAccount, CertificationLevel
 from .escrow import EscrowAgreement, EscrowDeposit, EscrowDomain, EscrowEvent, EscrowStatus
+from .funding import FundingRecord, FundingStatus
 from .gov_public import GovEntity, GovEntityType, GovProject, GovProjectManager, GovProjectMandate
 from .milestone import Milestone, MilestoneStatus
 from .payment import Payment, PaymentStatus
@@ -33,6 +34,8 @@ __all__ = [
     "EscrowDomain",
     "EscrowEvent",
     "EscrowStatus",
+    "FundingRecord",
+    "FundingStatus",
     "GovEntity",
     "GovEntityType",
     "GovProject",
