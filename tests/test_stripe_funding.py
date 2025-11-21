@@ -9,38 +9,49 @@ import pytest
 from app.models import FundingRecord, FundingStatus
 
 
-async def _create_escrow(client, headers, amount: str = "100.00", currency: str = "USD") -> int:
+async def _create_escrow(
+    client,
+    sender_headers,
+    admin_headers,
+    amount: str = "100.00",
+    currency: str = "USD",
+) -> int:
     suffix = uuid4().hex[:8]
     client_user = await client.post(
         "/users",
         json={"username": f"client-{suffix}", "email": f"client-{suffix}@example.com"},
-        headers=headers,
+        headers=admin_headers,
     )
+    assert client_user.status_code == 201, client_user.text
     provider_user = await client.post(
         "/users",
         json={"username": f"provider-{suffix}", "email": f"provider-{suffix}@example.com"},
-        headers=headers,
+        headers=admin_headers,
     )
+    assert provider_user.status_code == 201, provider_user.text
+
+    client_user_id = client_user.json()["id"]
+    provider_user_id = provider_user.json()["id"]
 
     escrow_response = await client.post(
         "/escrows",
         json={
-            "client_id": client_user.json()["id"],
-            "provider_id": provider_user.json()["id"],
+            "client_id": client_user_id,
+            "provider_id": provider_user_id,
             "amount_total": amount,
             "currency": currency,
             "release_conditions": {"proof": "delivery"},
             "deadline_at": "2030-01-01T00:00:00Z",
         },
-        headers=headers,
+        headers=sender_headers,
     )
-    escrow_response.raise_for_status()
+    assert escrow_response.status_code == 201, escrow_response.text
     return escrow_response.json()["id"]
 
 
 @pytest.mark.anyio
 async def test_funding_session_rejects_when_stripe_disabled(
-    client, sender_headers, db_session, monkeypatch
+    client, sender_headers, admin_headers, db_session, monkeypatch
 ):
     # Ensure table exists even without migration
     FundingRecord.__table__.create(bind=db_session.get_bind(), checkfirst=True)
@@ -50,9 +61,11 @@ async def test_funding_session_rejects_when_stripe_disabled(
 
     monkeypatch.setattr("app.services.funding.get_settings", lambda: StubSettings())
 
-    escrow_id = await _create_escrow(client, sender_headers)
+    escrow_id = await _create_escrow(client, sender_headers, admin_headers)
 
-    response = await client.post(f"/escrows/{escrow_id}/funding-session", headers=sender_headers)
+    response = await client.post(
+        f"/escrows/{escrow_id}/funding-session", headers=sender_headers
+    )
 
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "STRIPE_FUNDING_DISABLED"
@@ -60,7 +73,7 @@ async def test_funding_session_rejects_when_stripe_disabled(
 
 @pytest.mark.anyio
 async def test_funding_session_creates_record_when_stripe_enabled(
-    client, sender_headers, db_session, monkeypatch
+    client, sender_headers, admin_headers, db_session, monkeypatch
 ):
     FundingRecord.__table__.create(bind=db_session.get_bind(), checkfirst=True)
 
@@ -83,10 +96,12 @@ async def test_funding_session_creates_record_when_stripe_enabled(
     monkeypatch.setattr("app.services.funding.get_settings", lambda: StubSettings())
     monkeypatch.setattr("app.services.funding.StripeClient", FakeStripeClient)
 
-    escrow_id = await _create_escrow(client, sender_headers)
+    escrow_id = await _create_escrow(client, sender_headers, admin_headers)
 
-    response = await client.post(f"/escrows/{escrow_id}/funding-session", headers=sender_headers)
-    assert response.status_code == 201, response.text
+    response = await client.post(
+        f"/escrows/{escrow_id}/funding-session", headers=sender_headers
+    )
+    assert response.status_code == 200, response.text
     data = response.json()
     assert data["client_secret"] == "pi_client_secret"
 
