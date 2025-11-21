@@ -59,7 +59,7 @@ class StripeClient:
 
         return stripe.PaymentIntent.create(
             amount=_to_cents(amount),
-            currency=currency,
+            currency=currency.lower(),
             metadata=metadata,
         )
 
