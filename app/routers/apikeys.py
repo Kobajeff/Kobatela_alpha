@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.api_key import ApiKey, ApiScope
+from app.models.user import User
 from app.models.audit import AuditLog
 from app.security import require_scope
 from app.utils.audit import sanitize_payload_for_audit
@@ -26,6 +27,7 @@ class CreateKeyIn(BaseModel):
     name: str
     scope: ApiScope
     days_valid: int | None = 90
+    user_id: int | None = None
 
     @field_validator("name")
     @classmethod
@@ -49,6 +51,7 @@ class ApiKeyRead(BaseModel):
     id: int
     name: str
     scope: ApiScope
+    user_id: int | None
     is_active: bool
     created_at: datetime
     expires_at: datetime | None
@@ -68,6 +71,13 @@ class ApiKeyRead(BaseModel):
 )
 def create_api_key(payload: CreateKeyIn, db: Session = Depends(get_db)) -> ApiKeyCreateOut:
     """Crée une clé API côté serveur et renvoie la valeur brute une seule fois."""
+    user = db.get(User, payload.user_id) if payload.user_id else None
+    if payload.user_id and not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("USER_NOT_FOUND", "Linked user not found."),
+        )
+
     raw, prefix, key_hash = gen_key()
     now = datetime.now(UTC)
     expires_at = now + timedelta(days=payload.days_valid) if payload.days_valid else None
@@ -77,6 +87,7 @@ def create_api_key(payload: CreateKeyIn, db: Session = Depends(get_db)) -> ApiKe
         prefix=prefix,
         key_hash=key_hash,
         scope=payload.scope,
+        user_id=user.id if user else None,
         created_at=now,
         expires_at=expires_at,
         is_active=True,

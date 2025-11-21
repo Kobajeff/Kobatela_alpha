@@ -1,4 +1,4 @@
-# Kobatela_alpha — Capability & Stability Audit (2025-02-07)
+# Kobatela_alpha — Capability & Stability Audit (2025-11-21)
 
 ## A. Executive summary
 - Comprehensive FastAPI surface covering escrows, proofs, payments, spend controls, alerts, public mandates, and health with scoped API-key auth and audit logs on key actions. 【F:app/routers/escrow.py†L21-L107】【F:app/security.py†L33-L183】【F:app/routers/health.py†L104-L142】

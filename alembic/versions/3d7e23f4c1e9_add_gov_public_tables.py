@@ -24,8 +24,8 @@ def upgrade() -> None:
     op.create_table(
         "gov_entities",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("country", sa.String(length=2), nullable=False),
         sa.Column("type", gov_entity_type, nullable=False),
@@ -35,8 +35,8 @@ def upgrade() -> None:
     op.create_table(
         "gov_projects",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("gov_entity_id", sa.Integer(), sa.ForeignKey("gov_entities.id"), nullable=True),
         sa.Column("label", sa.String(length=255), nullable=False),
         sa.Column("project_type", sa.String(length=100), nullable=False),
@@ -50,8 +50,8 @@ def upgrade() -> None:
     op.create_table(
         "gov_project_mandates",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("gov_project_id", sa.Integer(), sa.ForeignKey("gov_projects.id"), nullable=False),
         sa.Column("escrow_id", sa.Integer(), sa.ForeignKey("escrow_agreements.id"), nullable=False),
     )
@@ -59,8 +59,8 @@ def upgrade() -> None:
     op.create_table(
         "gov_project_managers",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("gov_project_id", sa.Integer(), sa.ForeignKey("gov_projects.id"), nullable=False),
         sa.Column("user_id", sa.Integer(), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("role", sa.String(length=30), nullable=False),
