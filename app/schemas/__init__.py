@@ -28,7 +28,7 @@ from .transaction import (
     TransactionCreate,
     TransactionRead,
 )
-from .user import UserCreate, UserRead
+from .user import StripeAccountLinkRead, UserCreate, UserRead
 
 __all__ = [
     "AlertRead",
@@ -57,6 +57,7 @@ __all__ = [
     "CertificationCreate",
     "TransactionCreate",
     "TransactionRead",
+    "StripeAccountLinkRead",
     "UserCreate",
     "UserRead",
     "PublicDomain",

@@ -3,10 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_db
 from app.models.user import User
-from app.schemas.user import UserCreate, UserRead
 from app.models.api_key import ApiKey, ApiScope
+from app.schemas.user import StripeAccountLinkRead, UserCreate, UserRead
+from app.services.psp_stripe import StripeClient
 from app.security import require_scope
 from app.utils.audit import actor_from_api_key, log_audit
 from app.utils.errors import error_response
@@ -78,3 +80,43 @@ def get_user(
     )
 
     return user
+
+
+@router.post(
+    "/{user_id}/psp/stripe/account-link",
+    response_model=StripeAccountLinkRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_stripe_account_link_for_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
+):
+    """Create a Stripe Connect onboarding link for the given user."""
+
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response("USER_NOT_FOUND", "User not found."),
+        )
+
+    settings = get_settings()
+    if not (settings.STRIPE_ENABLED and settings.STRIPE_CONNECT_ENABLED):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=error_response("STRIPE_CONNECT_DISABLED", "Stripe Connect is disabled."),
+        )
+
+    stripe_client = StripeClient(settings)
+
+    if not user.stripe_account_id:
+        account = stripe_client.create_connected_account(user)
+        user.stripe_account_id = account.id
+        user.stripe_payout_status = "pending_onboarding"
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    link = stripe_client.create_account_link(user.stripe_account_id)
+    return StripeAccountLinkRead(url=link.url)

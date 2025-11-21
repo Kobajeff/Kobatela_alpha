@@ -18,3 +18,7 @@ class UserRead(BaseModel):
     stripe_payout_status: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StripeAccountLinkRead(BaseModel):
+    url: str
