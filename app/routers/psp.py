@@ -68,4 +68,12 @@ async def psp_webhook(
     return {"ok": "true", "event_id": event.event_id, "processed_at": event.processed_at.isoformat()}
 
 
+@router.post("/stripe/webhook", status_code=status.HTTP_200_OK)
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dict[str, bool]:
+    """Handle Stripe webhook callbacks with signature verification."""
+
+    await psp_webhooks.handle_stripe_webhook(request, db)
+    return {"received": True}
+
+
 __all__ = ["router"]
