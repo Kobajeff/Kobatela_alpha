@@ -14,6 +14,9 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     public_tag: Mapped[str] = mapped_column(String(10), default="private", nullable=False, index=True)
+    stripe_account_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    stripe_payout_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="0")
+    stripe_payout_status: Mapped[str | None] = mapped_column(String, nullable=True)
 
     sent_transactions = relationship(
         "Transaction", back_populates="sender", foreign_keys="Transaction.sender_id", cascade="all, delete-orphan"
