@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     psp_webhook_secret: str | None = None
     psp_webhook_secret_next: str | None = None
     psp_webhook_max_drift_seconds: int = 180
+    STRIPE_ENABLED: bool = False
+    STRIPE_SECRET_KEY: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+    STRIPE_CONNECT_ENABLED: bool = False
     SECRET_KEY: str = "change-me"
     DEV_API_KEY: str | None = Field(
         default=DEV_API_KEY,
