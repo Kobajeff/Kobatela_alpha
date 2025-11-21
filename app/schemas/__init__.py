@@ -1,6 +1,7 @@
 """Schema package exports."""
 from .alert import AlertRead
 from .escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate, EscrowRead
+from .funding import FundingRead, FundingSessionRead
 from .milestone import MilestoneCreate, MilestoneRead
 from .payment import PaymentRead
 from .proof import ProofCreate, ProofDecision, ProofRead
@@ -35,6 +36,8 @@ __all__ = [
     "EscrowCreate",
     "EscrowDepositCreate",
     "EscrowRead",
+    "FundingRead",
+    "FundingSessionRead",
     "MilestoneCreate",
     "MilestoneRead",
     "PaymentRead",
