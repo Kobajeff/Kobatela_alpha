@@ -66,6 +66,10 @@ class StripeClient:
         return stripe.PaymentIntent.create(
             amount=_to_cents(amount),
             currency=currency.lower(),
+            automatic_payment_methods={
+            "enabled": True,
+            "allow_redirects": "never",
+            },
             metadata=metadata,
         )
 
