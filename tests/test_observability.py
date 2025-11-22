@@ -1,0 +1,146 @@
+import json
+import pytest
+
+
+def test_ai_proof_advisor_logs_status(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: False)
+
+    result = ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}},
+        proof_storage_url=None,
+    )
+
+    assert result["risk_level"] == "warning"
+    assert "ai_disabled" in result.get("flags", [])
+
+
+def test_invoice_ocr_logs_status(monkeypatch):
+    from app.services import invoice_ocr
+
+    settings = invoice_ocr.get_settings()
+    monkeypatch.setattr(settings, "INVOICE_OCR_ENABLED", False, raising=False)
+    monkeypatch.setattr(settings, "INVOICE_OCR_PROVIDER", "none", raising=False)
+
+    metadata = invoice_ocr.enrich_metadata_with_invoice_ocr(
+        storage_url="test://file.pdf", existing_metadata={}, file_bytes=b""
+    )
+
+    assert metadata["ocr_status"] == "disabled"
+    assert metadata["ocr_provider"] == "disabled"
+
+
+def test_ai_circuit_breaker_skips_when_open(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    ai_proof_advisor._AI_CIRCUIT_OPEN = True
+    ai_proof_advisor._AI_FAILURE_COUNT = 5
+
+    result = ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}}, proof_storage_url=None
+    )
+
+    assert "circuit_breaker_open" in result.get("flags", [])
+    assert result["score"] == 0.5
+
+    ai_proof_advisor._AI_CIRCUIT_OPEN = False
+    ai_proof_advisor._AI_FAILURE_COUNT = 0
+
+
+def test_ai_circuit_breaker_opens_after_failures(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    class DummySettings:
+        OPENAI_API_KEY = "test"
+
+    class FailingClient:
+        def __init__(self, *_args, **_kwargs):
+            self.responses = self
+
+        def create(self, *_args, **_kwargs):
+            raise ValueError("boom")
+
+    ai_proof_advisor._AI_FAILURE_COUNT = 4
+    ai_proof_advisor._AI_CIRCUIT_OPEN = False
+
+    monkeypatch.setattr(ai_proof_advisor, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: True)
+    monkeypatch.setattr(ai_proof_advisor, "ai_model", lambda: "model")
+    monkeypatch.setattr(ai_proof_advisor, "ai_timeout_seconds", lambda: 1)
+    monkeypatch.setattr(ai_proof_advisor, "OpenAI", FailingClient)
+
+    result = ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}}, proof_storage_url=None
+    )
+
+    assert ai_proof_advisor._AI_CIRCUIT_OPEN is True
+    assert "retries_exhausted" in result.get("flags", [])
+
+    ai_proof_advisor._AI_FAILURE_COUNT = 0
+    ai_proof_advisor._AI_CIRCUIT_OPEN = False
+
+
+def test_ai_metrics_track_calls_and_errors(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    ai_proof_advisor._AI_CALLS = 0
+    ai_proof_advisor._AI_ERRORS = 0
+
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: False)
+
+    ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}},
+        proof_storage_url=None,
+    )
+
+    stats = ai_proof_advisor.get_ai_stats()
+    assert stats["calls"] == 1
+    assert stats["errors"] == 1
+
+    ai_proof_advisor._AI_CALLS = 0
+    ai_proof_advisor._AI_ERRORS = 0
+
+
+def test_ai_metrics_success_does_not_increment_errors(monkeypatch):
+    from app.services import ai_proof_advisor
+
+    class DummySettings:
+        OPENAI_API_KEY = "test"
+
+    class DummyResponse:
+        output_text = json.dumps(
+            {
+                "risk_level": "clean",
+                "score": 0.9,
+                "flags": [],
+                "explanation": "ok",
+            }
+        )
+
+    class DummyClient:
+        def __init__(self, *_args, **_kwargs):
+            self.responses = self
+
+        def create(self, *_args, **_kwargs):
+            return DummyResponse()
+
+    ai_proof_advisor._AI_CALLS = 0
+    ai_proof_advisor._AI_ERRORS = 0
+    ai_proof_advisor._AI_FAILURE_COUNT = 0
+    ai_proof_advisor._AI_CIRCUIT_OPEN = False
+
+    monkeypatch.setattr(ai_proof_advisor, "get_settings", lambda: DummySettings())
+    monkeypatch.setattr(ai_proof_advisor, "ai_enabled", lambda: True)
+    monkeypatch.setattr(ai_proof_advisor, "ai_model", lambda: "model")
+    monkeypatch.setattr(ai_proof_advisor, "ai_timeout_seconds", lambda: 1)
+    monkeypatch.setattr(ai_proof_advisor, "OpenAI", DummyClient)
+
+    ai_proof_advisor.call_ai_proof_advisor(
+        context={"document_context": {"metadata": {}}},
+        proof_storage_url=None,
+    )
+
+    stats = ai_proof_advisor.get_ai_stats()
+    assert stats["calls"] == 1
+    assert stats["errors"] == 0

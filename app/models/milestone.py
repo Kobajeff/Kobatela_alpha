@@ -2,8 +2,19 @@
 from decimal import Decimal
 from enum import Enum as PyEnum
 
-from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Enum as SqlEnum,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+
 from .base import Base
 
 
@@ -40,6 +51,9 @@ class Milestone(Base):
     proof_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     proof_kind = synonym("proof_type")
     validator: Mapped[str] = mapped_column(String(50), nullable=False, default="SENDER")
+
+    # Detailed configuration of the expected proof for this milestone
+    proof_requirements: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     geofence_lat: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     geofence_lng: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)
     geofence_radius_m: Mapped[float | None] = mapped_column(Float(asdecimal=False), nullable=True)

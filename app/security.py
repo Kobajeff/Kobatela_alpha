@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 from app.config import DEV_API_KEY, DEV_API_KEY_ALLOWED, ENV
 from app.db import get_db
 from app.models.api_key import ApiKey, ApiScope
+from app.models.user import User
 from app.models.audit import AuditLog
 from app.utils.apikey import find_valid_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 
 
@@ -53,7 +55,7 @@ def require_api_key(
                 action="LEGACY_API_KEY_USED",
                 entity="ApiKey",
                 entity_id=0,
-                data_json={"env": ENV},
+                data_json=sanitize_payload_for_audit({"env": ENV}),
                 at=now,
             )
         )
@@ -87,7 +89,7 @@ def require_api_key(
                 action="LEGACY_API_KEY_USED",
                 entity="ApiKey",
                 entity_id=0,
-                data_json={"env": ENV},
+                data_json=sanitize_payload_for_audit({"env": ENV}),
                 at=now,
             )
         )
@@ -123,7 +125,7 @@ def require_api_key(
             action="API_KEY_USED",
             entity="ApiKey",
             entity_id=key.id,
-            data_json=payload,
+            data_json=sanitize_payload_for_audit(payload),
             at=now,
         )
     )
@@ -153,4 +155,30 @@ def require_scope(allowed: Set[ApiScope]) -> Callable:
     return _dep
 
 
-__all__ = ["require_api_key", "require_scope"]
+def require_public_user(
+    api_key: ApiKey = Depends(require_api_key),
+    db: Session = Depends(get_db),
+) -> User:
+    """Ensure the API key is linked to a GOV/ONG user and return it."""
+
+    user_id = getattr(api_key, "user_id", None)
+    user = db.get(User, user_id) if user_id is not None else None
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response("PUBLIC_USER_NOT_FOUND", "User not found for API key."),
+        )
+
+    if user.public_tag not in {"GOV", "ONG"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(
+                "PUBLIC_ACCESS_FORBIDDEN",
+                "Access to KCT Public Sector is restricted to GOV/ONG accounts.",
+            ),
+        )
+
+    return user
+
+
+__all__ = ["require_api_key", "require_scope", "require_public_user"]

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import (
     AuditLog,
     EscrowAgreement,
@@ -19,8 +20,11 @@ from app.models import (
     MilestoneStatus,
     Payment,
     PaymentStatus,
+    User,
 )
+from app.services.psp_stripe import StripeClient
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -60,6 +64,51 @@ def available_balance(db: Session, escrow_id: int) -> Decimal:
     """Return the remaining balance available for payouts on the escrow."""
 
     return _sum_deposits(db, escrow_id) - _sum_payments(db, escrow_id)
+
+
+def _send_payout_via_psp(
+    db: Session,
+    *,
+    payment: Payment,
+    escrow: EscrowAgreement,
+    beneficiary: Optional[User],
+) -> str:
+    """Send a payout through the configured PSP and return the PSP reference."""
+
+    settings = get_settings()
+
+    def _fallback_stub() -> str:
+        payment.status = PaymentStatus.SENT
+        return payment.psp_ref or f"PSP-{uuid4()}"
+
+    if not settings.STRIPE_ENABLED or not settings.STRIPE_CONNECT_ENABLED or not (
+        beneficiary and beneficiary.stripe_account_id
+    ):
+        return _fallback_stub()
+
+    stripe_client = StripeClient(settings)
+    currency = getattr(payment, "currency", escrow.currency)
+
+    try:
+        transfer = stripe_client.create_transfer_to_connected(
+            escrow=escrow,
+            payment=payment,
+            destination_account_id=beneficiary.stripe_account_id,
+            amount=payment.amount,
+            currency=currency,
+        )
+    except Exception as exc:  # Stripe SDK failure
+        logger.exception(
+            "Stripe transfer failed",
+            extra={"escrow_id": escrow.id, "payment_id": payment.id},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=error_response("PSP_TRANSFER_FAILED", str(exc)),
+        ) from exc
+
+    payment.status = PaymentStatus.SENT
+    return transfer.id
 
 def _escrow_available(db: Session, escrow_id: int) -> Decimal:
     """Dépôts confirmés – paiements déjà envoyés (statuts débitants)."""
@@ -115,7 +164,14 @@ def execute_payout(
         if existing.status == PaymentStatus.PENDING:
             if milestone and milestone.status not in (MilestoneStatus.PAID, MilestoneStatus.PAYING):
                 milestone.status = MilestoneStatus.PAYING
-            existing.status = PaymentStatus.SENT
+            beneficiary = db.get(User, escrow.provider_id) if escrow.provider_id else None
+            psp_ref = _send_payout_via_psp(
+                db,
+                payment=existing,
+                escrow=escrow,
+                beneficiary=beneficiary,
+            )
+            existing.psp_ref = psp_ref
             if milestone:
                 milestone.status = MilestoneStatus.PAID
             db.commit()
@@ -161,6 +217,7 @@ def execute_payout(
     )
     try:
         db.add(payment)
+        db.flush()
         logger.info(
             "Payout initiated",
             extra={"escrow_id": escrow.id, "amount": str(amount), "milestone_id": getattr(milestone, "id", None)},
@@ -174,8 +231,14 @@ def execute_payout(
                 )
             milestone.status = MilestoneStatus.PAYING
 
-        payment.psp_ref = payment.psp_ref or f"PSP-{uuid4()}"
-        payment.status = PaymentStatus.SENT
+        beneficiary = db.get(User, escrow.provider_id) if escrow.provider_id else None
+        psp_ref = _send_payout_via_psp(
+            db,
+            payment=payment,
+            escrow=escrow,
+            beneficiary=beneficiary,
+        )
+        payment.psp_ref = psp_ref
         if milestone:
             milestone.status = MilestoneStatus.PAID
 
@@ -184,6 +247,25 @@ def execute_payout(
         if milestone:
             db.refresh(milestone)
         _handle_post_payment(db, payment)
+        db.add(
+            AuditLog(
+                actor="system",
+                action="PAYMENT_EXECUTED",
+                entity="Payment",
+                entity_id=payment.id,
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "escrow_id": payment.escrow_id,
+                        "milestone_id": payment.milestone_id,
+                        "amount": str(payment.amount),
+                        "idempotency_key": payment.idempotency_key,
+                        "psp_ref": payment.psp_ref,
+                    }
+                ),
+                at=utcnow(),
+            )
+        )
+        db.commit()
         logger.info(
             "Payout executed",
             extra={"payment_id": payment.id, "escrow_id": escrow.id, "status": payment.status.value},
@@ -213,6 +295,56 @@ def _handle_post_payment(db: Session, payment: Payment) -> None:
         return
 
     _finalize_escrow_if_paid(db, payment.escrow_id)
+
+
+def mark_failed_from_psp(
+    db: Session,
+    *,
+    payment_id: int | str,
+    external_error: str | None = None,
+) -> Payment | None:
+    """Mark a payment as failed based on PSP feedback."""
+
+    try:
+        pid = int(payment_id)
+    except (TypeError, ValueError):
+        logger.warning("Invalid payment_id in PSP failure payload", extra={"payment_id": payment_id})
+        return None
+
+    payment = db.get(Payment, pid)
+    if payment is None:
+        logger.info("PSP reported failure for unknown payment", extra={"payment_id": pid})
+        return None
+
+    if payment.status == PaymentStatus.ERROR:
+        logger.info("Payment already marked as error", extra={"payment_id": payment.id})
+        return payment
+
+    previous_status = payment.status
+    payment.status = PaymentStatus.ERROR
+
+    db.add(
+        AuditLog(
+            actor="psp",
+            action="PAYMENT_FAILED",
+            entity="Payment",
+            entity_id=payment.id,
+            data_json=sanitize_payload_for_audit(
+                {
+                    "psp_ref": payment.psp_ref,
+                    "external_error": external_error,
+                    "previous_status": getattr(previous_status, "value", str(previous_status)),
+                }
+            ),
+            at=utcnow(),
+        )
+    )
+
+    db.add(payment)
+    db.commit()
+    db.refresh(payment)
+    logger.info("Payment marked as error from PSP webhook", extra={"payment_id": payment.id})
+    return payment
 
 def execute_payment(db: Session, payment_id: int) -> Payment:
     """Execute a payment entity via the public endpoint."""
@@ -262,13 +394,17 @@ def execute_payment(db: Session, payment_id: int) -> Payment:
         db.add(
             AuditLog(
                 actor="system",
-                action="EXECUTE_PAYOUT",
+                action="PAYMENT_EXECUTED",
                 entity="Payment",
                 entity_id=payment.id,
-                data_json={
-                    "idempotency_key": payment.idempotency_key,
-                    "amount": str(payment.amount),
-                },
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "idempotency_key": payment.idempotency_key,
+                        "amount": str(payment.amount),
+                        "escrow_id": payment.escrow_id,
+                        "milestone_id": payment.milestone_id,
+                    }
+                ),
                 at=utcnow(),
             )
         )
@@ -348,12 +484,14 @@ def finalize_payment_settlement(
             action="PAYMENT_SETTLED",
             entity="Payment",
             entity_id=payment.id,
-            data_json={
-                "escrow_id": payment.escrow_id,
-                "amount": str(payment.amount),
-                "source": source,
-                **(extra or {}),
-            },
+            data_json=sanitize_payload_for_audit(
+                {
+                    "escrow_id": payment.escrow_id,
+                    "amount": str(payment.amount),
+                    "source": source,
+                    **(extra or {}),
+                }
+            ),
             at=now,
         )
     )
@@ -395,10 +533,16 @@ def _finalize_escrow_if_paid(db: Session, escrow_id: int) -> None:
                     action="ESCROW_RELEASED",
                     entity="EscrowAgreement",
                     entity_id=escrow_id,
-                    data_json={"source": "_finalize_escrow_if_paid"},
+                    data_json=sanitize_payload_for_audit({"source": "_finalize_escrow_if_paid"}),
                     at=now,
                 )
             )
             db.commit()
 
-__all__ = ["available_balance", "execute_payment", "execute_payout", "finalize_payment_settlement"]
+__all__ = [
+    "available_balance",
+    "execute_payment",
+    "execute_payout",
+    "finalize_payment_settlement",
+    "mark_failed_from_psp",
+]

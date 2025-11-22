@@ -1,6 +1,7 @@
 """Proof lifecycle services."""
 import logging
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
+import os
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -23,11 +24,16 @@ from app.services import (
     payments as payments_service,
     rules as rules_service,
 )
+from app.services.ai_proof_advisor import call_ai_proof_advisor
+from app.services.ai_proof_flags import ai_enabled
+from app.services.document_checks import compute_document_backend_checks
+from app.services.invoice_ocr import normalize_invoice_amount_and_currency, run_invoice_ocr_if_enabled
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
-from typing import Final
+from typing import Any, Final, Mapping, Sequence
 
 HARD_VALIDATION_ERRORS: Final = {
     "OUT_OF_GEOFENCE",
@@ -38,11 +44,29 @@ HARD_VALIDATION_ERRORS: Final = {
     "BAD_EXIF_TIMESTAMP",
 }
 
-
+AI_PROOF_ENABLED: Final[bool] = os.getenv("KCT_AI_PROOF_ENABLED", "0") == "1"
 logger = logging.getLogger(__name__)
 
 
-def submit_proof(db: Session, payload: ProofCreate) -> Proof:
+def _sanitize_metadata_for_storage(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if metadata is None:
+        return None
+
+    def _sanitize(value: Any) -> Any:
+        if isinstance(value, Mapping):
+            return {k: _sanitize(v) for k, v in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [_sanitize(item) for item in value]
+        if isinstance(value, Decimal):
+            return str(value)
+        return value
+
+    return {key: _sanitize(value) for key, value in dict(metadata).items()}
+
+
+def submit_proof(
+    db: Session, payload: ProofCreate, *, actor: str | None = None
+) -> Proof:
     """Submit a proof for the given escrow milestone."""
 
     milestone = _get_milestone_by_idx(db, payload.escrow_id, payload.milestone_idx)
@@ -57,6 +81,45 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
     # en cas d’erreur "dure" (géofence, exif manquant, trop vieux, etc.).
 
     metadata_payload = dict(payload.metadata or {})
+    metadata_payload.pop("ai_assessment", None)
+    ai_result: dict[str, Any] | None = None
+
+    if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
+        ocr_result = run_invoice_ocr_if_enabled(b"")
+        metadata_payload.setdefault("ocr_status", ocr_result.get("ocr_status"))
+        metadata_payload.setdefault("ocr_provider", ocr_result.get("ocr_provider"))
+
+        if "total_amount" in ocr_result and metadata_payload.get("invoice_total_amount") is None:
+            metadata_payload["invoice_total_amount"] = ocr_result["total_amount"]
+        if "currency" in ocr_result and metadata_payload.get("invoice_currency") is None:
+            metadata_payload["invoice_currency"] = ocr_result["currency"]
+
+        metadata_payload.setdefault("ocr_raw", {})
+        metadata_payload["ocr_raw"].update(ocr_result)
+
+    metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
+
+    invoice_total_amount, invoice_currency, norm_errors = normalize_invoice_amount_and_currency(
+        metadata_payload
+    )
+    if norm_errors:
+        logger.warning(
+            "Invoice normalization errors on proof submission",
+            extra={
+                "escrow_id": payload.escrow_id,
+                "milestone_idx": payload.milestone_idx,
+                "errors": norm_errors,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=error_response(
+                "INVOICE_NORMALIZATION_ERROR",
+                "Les données de montant ou de devise de la facture sont invalides.",
+            ),
+        )
+
+    metadata_payload = _sanitize_metadata_for_storage(metadata_payload) or {}
     review_reason: str | None = None
     auto_approve = False
 
@@ -135,6 +198,96 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         else:
             auto_approve = True
 
+            # 5) (NEW) Optional AI call for risk assessment (PHOTO only)
+            if ai_enabled():
+                try:
+                    ai_context = {
+                        "mandate_context": {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_idx": payload.milestone_idx,
+                        "milestone_label": milestone.label,
+                        "milestone_amount": float(milestone.amount),
+                        "proof_type": milestone.proof_type,
+                        "proof_requirements": getattr(milestone, "proof_requirements", None),
+                        "invoice_total_amount": float(invoice_total_amount)
+                        if invoice_total_amount is not None
+                        else None,
+                        "invoice_currency": invoice_currency,
+                    },
+                    "backend_checks": {
+                        "has_metadata": payload.metadata is not None,
+                        "geofence_configured": geofence is not None,
+                        "validation_ok": bool(ok),
+                            "validation_reason": reason,
+                        },
+                        "document_context": {
+                            "type": payload.type,
+                            "storage_url": payload.storage_url,
+                            "sha256": payload.sha256,
+                            "metadata": metadata_payload,
+                        },
+                    }
+
+                    ai_result = call_ai_proof_advisor(
+                        context=ai_context,
+                        proof_storage_url=payload.storage_url,
+                    )
+
+                    # Store AI result in metadata of the proof
+                    metadata_payload["ai_assessment"] = ai_result
+
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("AI proof advisor integration failed: %s", exc)
+                    # Never block the proof because of AI issues
+                    # -> fall back to normal behavior (no AI enrichment)
+                    # (nothing else to do here)
+
+    else:
+        # NON-PHOTO proofs (PDF, invoices, contracts, other)
+        # → always manual review (no auto_approve) BUT we call AI as an advisor if enabled.
+        if ai_enabled():
+            try:
+                proof_reqs = getattr(milestone, "proof_requirements", None)
+
+                backend_checks = compute_document_backend_checks(
+                    proof_requirements=proof_reqs,
+                    metadata=metadata_payload,
+                )
+
+                ai_context = {
+                    "mandate_context": {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_idx": payload.milestone_idx,
+                        "milestone_label": milestone.label,
+                        "milestone_amount": float(milestone.amount),
+                        "proof_type": milestone.proof_type,
+                        "proof_requirements": proof_reqs,
+                        "invoice_total_amount": float(invoice_total_amount)
+                        if invoice_total_amount is not None
+                        else None,
+                        "invoice_currency": invoice_currency,
+                    },
+                    "backend_checks": backend_checks,
+                    "document_context": {
+                        "type": payload.type,  # e.g. "PDF", "INVOICE", "CONTRACT"
+                        "storage_url": payload.storage_url,
+                        "sha256": payload.sha256,
+                        "metadata": metadata_payload,
+                        # Future extension: "ocr_text": "..." once OCR is wired
+                    },
+                }
+
+                ai_result = call_ai_proof_advisor(
+                    context=ai_context,
+                    proof_storage_url=payload.storage_url,
+                )
+                metadata_payload["ai_assessment"] = ai_result
+
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("AI proof advisor (doc) integration failed: %s", exc)
+                # Never block the proof because of AI issues
+                # → continue with manual review as usual
+
     # -------------------------
     # Contrôles d’état APRES validation photo
     # -------------------------
@@ -183,17 +336,72 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
         metadata_=metadata_payload or None,  # colonne = metadata_
         status=proof_status,
         created_at=utcnow(),
+        invoice_total_amount=invoice_total_amount,
+        invoice_currency=invoice_currency,
     )
+    if ai_result:
+        proof.ai_risk_level = ai_result.get("risk_level")
+        score = ai_result.get("score")
+        if score is None:
+            proof.ai_score = None
+        else:
+            try:
+                proof.ai_score = Decimal(str(score))
+            except (InvalidOperation, TypeError, ValueError):
+                proof.ai_score = None
+        proof.ai_flags = list(ai_result.get("flags") or [])
+        proof.ai_explanation = ai_result.get("explanation")
+        proof.ai_checked_at = utcnow()
     db.add(proof)
     db.flush()
 
+    if payload.type in {"PDF", "INVOICE", "CONTRACT"}:
+        db.add(
+            AuditLog(
+                actor="invoice_ocr",
+                action="INVOICE_OCR_RUN",
+                entity="Proof",
+                entity_id=proof.id,
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_id": milestone.id,
+                        "ocr_status": metadata_payload.get("ocr_status"),
+                        "ocr_provider": metadata_payload.get("ocr_provider"),
+                    }
+                ),
+                at=utcnow(),
+            )
+        )
+
+    if ai_result:
+        db.add(
+            AuditLog(
+                actor="ai_proof_advisor",
+                action="AI_PROOF_ASSESSMENT",
+                entity="Proof",
+                entity_id=proof.id,
+                data_json=sanitize_payload_for_audit(
+                    {
+                        "escrow_id": payload.escrow_id,
+                        "milestone_id": milestone.id,
+                        "proof_type": payload.type,
+                        "risk_level": ai_result.get("risk_level"),
+                        "score": ai_result.get("score"),
+                        "flags": ai_result.get("flags"),
+                    }
+                ),
+                at=utcnow(),
+            )
+        )
+
     db.add(
         AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="SUBMIT_PROOF",
             entity="Proof",
             entity_id=proof.id,
-            data_json=payload.model_dump(),
+            data_json=sanitize_payload_for_audit(payload.model_dump()),
             at=utcnow(),
         )
     )
@@ -247,7 +455,67 @@ def submit_proof(db: Session, payload: ProofCreate) -> Proof:
 
 
 
-def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proof:
+def decide_proof(
+    db: Session,
+    proof_id: int,
+    *,
+    decision: str,
+    note: str | None = None,
+    actor: str | None = None,
+) -> Proof:
+    """Approve or reject a proof with AI governance safeguards."""
+
+    normalized = (decision or "").strip().lower()
+    if normalized in {"approve", "approved"}:
+        target = "approved"
+    elif normalized in {"reject", "rejected"}:
+        target = "rejected"
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response("INVALID_DECISION", "Decision must be approve or reject."),
+        )
+
+    proof = _get_proof_or_404(db, proof_id)
+    ai_flagged = (proof.ai_risk_level or "").lower() in {"warning", "suspect"}
+    if target == "approved" and ai_flagged:
+        if note is None or not note.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_response(
+                    "AI_REVIEW_NOTE_REQUIRED",
+                    "A justification note is required to approve a proof flagged as warning or suspect by AI.",
+                ),
+            )
+
+    if target == "approved":
+        updated = approve_proof(db, proof_id, note=note, actor=actor)
+    else:
+        updated = reject_proof(db, proof_id, note=note, actor=actor)
+
+    updated.ai_reviewed_by = actor or "system"
+    updated.ai_reviewed_at = utcnow()
+    db.add(
+        AuditLog(
+            actor=actor or "system",
+            action="DECIDE_PROOF",
+            entity="Proof",
+            entity_id=updated.id,
+            data_json=sanitize_payload_for_audit(
+                {"decision": target, "note": note, "proof_id": updated.id}
+            ),
+            at=utcnow(),
+        )
+    )
+    db.add(updated)
+    db.commit()
+    db.refresh(updated)
+    return updated
+
+
+def approve_proof(
+    db: Session, proof_id: int, *, note: str | None = None, actor: str | None = None
+) -> Proof:
     """Approve a proof and trigger payment execution."""
 
     proof = _get_proof_or_404(db, proof_id)
@@ -279,11 +547,11 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
 
     db.add(
         AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="APPROVE_PROOF",
             entity="Proof",
             entity_id=proof.id,
-            data_json={"proof_id": proof.id, "note": note},
+            data_json=sanitize_payload_for_audit({"proof_id": proof.id, "note": note}),
             at=utcnow(),
         )
     )
@@ -321,7 +589,9 @@ def approve_proof(db: Session, proof_id: int, *, note: str | None = None) -> Pro
     return proof
 
 
-def reject_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proof:
+def reject_proof(
+    db: Session, proof_id: int, *, note: str | None = None, actor: str | None = None
+) -> Proof:
     """Reject a proof submission and reset the milestone."""
 
     proof = _get_proof_or_404(db, proof_id)
@@ -346,11 +616,11 @@ def reject_proof(db: Session, proof_id: int, *, note: str | None = None) -> Proo
 
     db.add(
         AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="REJECT_PROOF",
             entity="Proof",
             entity_id=proof.id,
-            data_json={"proof_id": proof.id, "note": note},
+            data_json=sanitize_payload_for_audit({"proof_id": proof.id, "note": note}),
             at=utcnow(),
         )
     )
@@ -411,4 +681,4 @@ def _handle_post_payment(db: Session, escrow: EscrowAgreement) -> None:
             logger.info("Escrow closed after all milestones paid", extra={"escrow_id": escrow.id})
 
 
-__all__ = ["submit_proof", "approve_proof", "reject_proof"]
+__all__ = ["submit_proof", "approve_proof", "reject_proof", "decide_proof"]

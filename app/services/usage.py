@@ -13,7 +13,7 @@ from app.models.escrow import EscrowAgreement, EscrowEvent, EscrowStatus
 from app.models.payment import Payment
 from app.services.idempotency import get_existing_by_key
 from app.services.payments import available_balance, execute_payout, finalize_payment_settlement
-from app.utils.audit import log_audit
+from app.utils.audit import log_audit, sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
@@ -31,6 +31,7 @@ def _audit_usage(
     amount: Decimal,
     entity_id: int | None = None,
     note: str | None = None,
+    actor: str | None = None,
 ) -> None:
     payload = {
         "escrow_id": escrow_id,
@@ -41,7 +42,7 @@ def _audit_usage(
         payload["note"] = note
     log_audit(
         db,
-        actor="system",
+        actor=actor or "system",
         action=action,
         entity="AllowedPayee",
         entity_id=entity_id,
@@ -56,6 +57,7 @@ def add_allowed_payee(
     label: str,
     daily_limit: Decimal | None = None,
     total_limit: Decimal | None = None,
+    actor: str | None = None,
 ) -> AllowedPayee:
     """Register a payee that is allowed to receive conditional usage payouts."""
 
@@ -72,17 +74,19 @@ def add_allowed_payee(
     db.add(payee)
 
     audit = AuditLog(
-        actor="system",
+        actor=actor or "system",
         action="ADD_ALLOWED_PAYEE",
         entity="AllowedPayee",
-        data_json={
-            "escrow_id": escrow_id,
-            "payee_ref": payee_ref,
-            "limits": {
-                "daily": str(daily_limit) if daily_limit is not None else None,
-                "total": str(total_limit) if total_limit is not None else None,
-            },
-        },
+        data_json=sanitize_payload_for_audit(
+            {
+                "escrow_id": escrow_id,
+                "payee_ref": payee_ref,
+                "limits": {
+                    "daily": str(daily_limit) if daily_limit is not None else None,
+                    "total": str(total_limit) if total_limit is not None else None,
+                },
+            }
+        ),
         at=utcnow(),
     )
     try:
@@ -113,6 +117,7 @@ def spend_to_allowed_payee(
     amount: Decimal,
     idempotency_key: str,
     note: str | None = None,
+    actor: str | None = None,
 ) -> Payment:
     """Execute a payout toward an allowed payee respecting configured limits."""
 
@@ -138,6 +143,7 @@ def spend_to_allowed_payee(
             escrow_id=escrow_id,
             payee_ref=payee_ref,
             amount=amount,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -155,6 +161,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             note=escrow.status.value,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -180,6 +187,7 @@ def spend_to_allowed_payee(
             escrow_id=escrow_id,
             payee_ref=payee_ref,
             amount=amount,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -213,6 +221,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             entity_id=payee.id,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -231,6 +240,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             entity_id=payee.id,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -250,6 +260,7 @@ def spend_to_allowed_payee(
             payee_ref=payee_ref,
             amount=amount,
             entity_id=payee.id,
+            actor=actor,
         )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -308,15 +319,17 @@ def spend_to_allowed_payee(
         at=utcnow(),
     )
     audit = AuditLog(
-        actor="system",
+        actor=actor or "system",
         action="USAGE_SPEND",
         entity="Payment",
         entity_id=payment.id,
-        data_json={
-            "escrow_id": escrow.id,
-            "payee_ref": payee_ref,
-            "amount": str(amount),
-        },
+        data_json=sanitize_payload_for_audit(
+            {
+                "escrow_id": escrow.id,
+                "payee_ref": payee_ref,
+                "amount": str(amount),
+            }
+        ),
         at=utcnow(),
     )
     db.add_all([payee, event, audit])

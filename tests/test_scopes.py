@@ -61,6 +61,7 @@ async def test_sender_forbidden_on_transactions(client, sender_headers):
     assert response.status_code == 403
 
 
+@pytest.mark.anyio
 async def test_legacy_key_rejected_outside_dev(monkeypatch, client):
     monkeypatch.setattr("app.config.DEV_API_KEY_ALLOWED", False, raising=False)
     monkeypatch.setattr("app.security.DEV_API_KEY_ALLOWED", False, raising=False)

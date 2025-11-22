@@ -14,12 +14,19 @@ from app.models.transaction import Transaction, TransactionStatus
 from app.schemas.transaction import AllowlistCreate, CertificationCreate, TransactionCreate
 from app.services import alerts as alert_service
 from app.services.idempotency import get_existing_by_key
+from app.utils.audit import sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
 
 logger = logging.getLogger(__name__)
 
 ALERT_UNAUTHORIZED = "UNAUTHORIZED_TRANSFER_ATTEMPT"
+
+
+def get_transaction(db: Session, transaction_id: int) -> Transaction | None:
+    """Return a transaction by id."""
+
+    return db.get(Transaction, transaction_id)
 
 
 def _audit(
@@ -37,13 +44,15 @@ def _audit(
             action=action,
             entity=entity,
             entity_id=entity_id,
-            data_json=data or {},
+            data_json=sanitize_payload_for_audit(data or {}),
             at=utcnow(),
         )
     )
 
 
-def add_to_allowlist(db: Session, payload: AllowlistCreate) -> dict[str, str]:
+def add_to_allowlist(
+    db: Session, payload: AllowlistCreate, *, actor: str | None = None
+) -> dict[str, str]:
     """Add a recipient to the sender allowlist and audit the mutation."""
 
     exists_stmt = select(AllowedRecipient).where(
@@ -58,7 +67,7 @@ def add_to_allowlist(db: Session, payload: AllowlistCreate) -> dict[str, str]:
     db.flush()
     _audit(
         db,
-        actor="admin",
+        actor=actor or "admin",
         action="ALLOWLIST_ADD",
         entity="AllowedRecipient",
         entity_id=entry.id,
@@ -76,7 +85,9 @@ def add_to_allowlist(db: Session, payload: AllowlistCreate) -> dict[str, str]:
     return {"status": "added"}
 
 
-def add_certification(db: Session, payload: CertificationCreate) -> dict[str, str]:
+def add_certification(
+    db: Session, payload: CertificationCreate, *, actor: str | None = None
+) -> dict[str, str]:
     """Create or update a certified account entry with an audit trail."""
 
     stmt = select(CertifiedAccount).where(CertifiedAccount.user_id == payload.user_id)
@@ -96,7 +107,7 @@ def add_certification(db: Session, payload: CertificationCreate) -> dict[str, st
 
     _audit(
         db,
-        actor="admin",
+        actor=actor or "admin",
         action="CERTIFICATION_UPDATE",
         entity="CertifiedAccount",
         entity_id=entity_id,
@@ -107,7 +118,13 @@ def add_certification(db: Session, payload: CertificationCreate) -> dict[str, st
     return {"status": status_label}
 
 
-def create_transaction(db: Session, payload: TransactionCreate, *, idempotency_key: str | None) -> Tuple[Transaction, bool]:
+def create_transaction(
+    db: Session,
+    payload: TransactionCreate,
+    *,
+    idempotency_key: str | None,
+    actor: str | None = None,
+) -> Tuple[Transaction, bool]:
     """Create a restricted transaction, returning the entity and whether it was newly created."""
 
     if idempotency_key:
@@ -156,7 +173,7 @@ def create_transaction(db: Session, payload: TransactionCreate, *, idempotency_k
         db.flush()
 
         audit = AuditLog(
-            actor="system",
+            actor=actor or "system",
             action="CREATE_TRANSACTION",
             entity="Transaction",
             entity_id=transaction.id,

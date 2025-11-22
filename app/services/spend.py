@@ -1,7 +1,7 @@
 """Spend management services."""
 import logging
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, select, update
@@ -19,9 +19,21 @@ from app.schemas.spend import (
 )
 from app.services.mandates import audit_mandate_event
 from app.services.idempotency import get_existing_by_key
-from app.utils.audit import log_audit
+from app.utils.audit import log_audit, sanitize_payload_for_audit
 from app.utils.errors import error_response
 from app.utils.time import utcnow
+
+_DECIMAL_QUANT = Decimal("0.01")
+
+
+def _to_decimal(amount: Decimal | float | int | str) -> Decimal:
+    """Normalize amount inputs to two-decimal ``Decimal`` values."""
+
+    if isinstance(amount, Decimal):
+        value = amount
+    else:
+        value = Decimal(str(amount))
+    return value.quantize(_DECIMAL_QUANT, rounding=ROUND_HALF_UP)
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +107,9 @@ def _consume_mandate_atomic(
     return result.rowcount == 1
 
 
-def create_category(db: Session, payload: SpendCategoryCreate) -> SpendCategory:
+def create_category(
+    db: Session, payload: SpendCategoryCreate, *, actor: str | None = None
+) -> SpendCategory:
     """Create a new spend category."""
 
     category = SpendCategory(code=payload.code, label=payload.label)
@@ -111,7 +125,7 @@ def create_category(db: Session, payload: SpendCategoryCreate) -> SpendCategory:
 
     log_audit(
         db,
-        actor="admin",
+        actor=actor or "admin",
         action="SPEND_CATEGORY_CREATED",
         entity="SpendCategory",
         entity_id=category.id,
@@ -124,7 +138,9 @@ def create_category(db: Session, payload: SpendCategoryCreate) -> SpendCategory:
     return category
 
 
-def create_merchant(db: Session, payload: MerchantCreate) -> Merchant:
+def create_merchant(
+    db: Session, payload: MerchantCreate, *, actor: str | None = None
+) -> Merchant:
     """Create a merchant."""
 
     category = None
@@ -149,7 +165,7 @@ def create_merchant(db: Session, payload: MerchantCreate) -> Merchant:
 
     log_audit(
         db,
-        actor="admin",
+        actor=actor or "admin",
         action="SPEND_MERCHANT_CREATED",
         entity="Merchant",
         entity_id=merchant.id,
@@ -166,7 +182,9 @@ def create_merchant(db: Session, payload: MerchantCreate) -> Merchant:
     return merchant
 
 
-def allow_usage(db: Session, payload: AllowedUsageCreate) -> dict[str, str]:
+def allow_usage(
+    db: Session, payload: AllowedUsageCreate, *, actor: str | None = None
+) -> dict[str, str]:
     """Allow usage for a merchant or category."""
 
     has_merchant = payload.merchant_id is not None
@@ -210,7 +228,7 @@ def allow_usage(db: Session, payload: AllowedUsageCreate) -> dict[str, str]:
 
     log_audit(
         db,
-        actor="admin",
+        actor=actor or "admin",
         action="SPEND_ALLOW_CREATED",
         entity="AllowedUsage",
         entity_id=usage.id,
@@ -226,14 +244,29 @@ def allow_usage(db: Session, payload: AllowedUsageCreate) -> dict[str, str]:
     return {"status": "added"}
 
 
-def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: str | None) -> Purchase:
+def create_purchase(
+    db: Session,
+    payload: PurchaseCreate,
+    *,
+    idempotency_key: str | None,
+    actor: str | None = None,
+) -> Purchase:
     """Create an authorized purchase if the usage is allowed."""
 
-    if idempotency_key:
-        existing = get_existing_by_key(db, Purchase, idempotency_key)
-        if existing:
-            logger.info("Idempotent purchase reused", extra={"purchase_id": existing.id})
-            return existing
+    normalized_key = (idempotency_key or "").strip()
+    if not normalized_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_response(
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Header 'Idempotency-Key' is required for POST /spend/purchases.",
+            ),
+        )
+
+    existing = get_existing_by_key(db, Purchase, normalized_key)
+    if existing:
+        logger.info("Idempotent purchase reused", extra={"purchase_id": existing.id})
+        return existing
 
     merchant = db.get(Merchant, payload.merchant_id)
     if merchant is None:
@@ -326,7 +359,7 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
             detail=error_response("UNAUTHORIZED_USAGE", "Sender is not authorized for this purchase."),
         )
 
-    amount = payload.amount
+    amount = _to_decimal(payload.amount)
     consumed = _consume_mandate_atomic(
         db,
         mandate=mandate,
@@ -363,7 +396,7 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
         amount=amount,
         currency=payload.currency,
         status=PurchaseStatus.COMPLETED,
-        idempotency_key=idempotency_key,
+        idempotency_key=normalized_key,
     )
     db.add(purchase)
 
@@ -371,14 +404,13 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
         db.flush()
     except IntegrityError:
         db.rollback()
-        if idempotency_key:
-            existing = get_existing_by_key(db, Purchase, idempotency_key)
-            if existing:
-                logger.info(
-                    "Idempotent purchase reused after race",
-                    extra={"purchase_id": existing.id},
-                )
-                return existing
+        existing = get_existing_by_key(db, Purchase, normalized_key)
+        if existing:
+            logger.info(
+                "Idempotent purchase reused after race",
+                extra={"purchase_id": existing.id},
+            )
+            return existing
         raise
 
     audit_mandate_event(
@@ -396,14 +428,16 @@ def create_purchase(db: Session, payload: PurchaseCreate, *, idempotency_key: st
     )
 
     audit = AuditLog(
-        actor="system",
+        actor=actor or "system",
         action="CREATE_PURCHASE",
         entity="Purchase",
         entity_id=purchase.id,
-        data_json={
-            **payload.model_dump(mode="json"),
-            "resolved_beneficiary_id": beneficiary_id,
-        },
+        data_json=sanitize_payload_for_audit(
+            {
+                **payload.model_dump(mode="json"),
+                "resolved_beneficiary_id": beneficiary_id,
+            }
+        ),
         at=utcnow(),
     )
     db.add(audit)

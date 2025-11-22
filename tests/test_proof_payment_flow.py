@@ -1,11 +1,65 @@
 """End-to-end test for proof approval and payment execution."""
 from datetime import UTC, datetime
 from decimal import Decimal
+from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from app.models import EscrowAgreement, EscrowStatus, Milestone, MilestoneStatus, Payment, PaymentStatus
+from app.config import get_settings
+from app.models import (
+    EscrowAgreement,
+    EscrowStatus,
+    Milestone,
+    MilestoneStatus,
+    Payment,
+    PaymentStatus,
+    User,
+)
+from app.schemas.proof import ProofCreate
+from app.services import proofs as proofs_service
+
+
+def _create_pdf_milestone(db_session):
+    """Create a simple escrow + PDF milestone for proof submissions."""
+
+    client = User(
+        username=f"client-{uuid4().hex[:8]}",
+        email=f"client-{uuid4().hex[:8]}@example.com",
+    )
+    provider = User(
+        username=f"provider-{uuid4().hex[:8]}",
+        email=f"provider-{uuid4().hex[:8]}@example.com",
+    )
+    db_session.add_all([client, provider])
+    db_session.flush()
+
+    escrow = EscrowAgreement(
+        client_id=client.id,
+        provider_id=provider.id,
+        amount_total=Decimal("100.00"),
+        currency="USD",
+        status=EscrowStatus.FUNDED,
+        release_conditions_json={"type": "milestone"},
+        deadline_at=datetime.now(tz=UTC),
+    )
+    db_session.add(escrow)
+    db_session.flush()
+
+    milestone = Milestone(
+        escrow_id=escrow.id,
+        idx=1,
+        label="Invoice",
+        amount=Decimal("25.00"),
+        proof_type="PDF",
+        validator="SENDER",
+        status=MilestoneStatus.WAITING,
+    )
+    db_session.add(milestone)
+    db_session.commit()
+
+    return escrow, milestone
 
 
 @pytest.mark.anyio("asyncio")
@@ -98,3 +152,162 @@ async def test_proof_approval_triggers_payment(client, auth_headers, db_session)
     second_exec = await client.post(f"/payments/execute/{payment.id}", headers=auth_headers)
     assert second_exec.status_code == 200
     assert second_exec.json()["status"] == "SENT"
+
+
+def test_submit_proof_persists_ai_columns(monkeypatch, db_session):
+    settings = get_settings()
+    original_flag = settings.AI_PROOF_ADVISOR_ENABLED
+    settings.AI_PROOF_ADVISOR_ENABLED = True
+    stub_result = {
+        "risk_level": "warning",
+        "score": 0.66,
+        "flags": ["invoice_amount_match"],
+        "explanation": "Analyse réussie",
+    }
+    monkeypatch.setattr(
+        proofs_service, "call_ai_proof_advisor", lambda **_: stub_result,
+    )
+    try:
+        client = User(username="ai-client", email="ai-client@example.com")
+        provider = User(username="ai-provider", email="ai-provider@example.com")
+        db_session.add_all([client, provider])
+        db_session.flush()
+
+        escrow = EscrowAgreement(
+            client_id=client.id,
+            provider_id=provider.id,
+            amount_total=Decimal("100.00"),
+            currency="USD",
+            status=EscrowStatus.FUNDED,
+            release_conditions_json={"type": "milestone"},
+            deadline_at=datetime.now(tz=UTC),
+        )
+        db_session.add(escrow)
+        db_session.flush()
+
+        milestone = Milestone(
+            escrow_id=escrow.id,
+            idx=1,
+            label="Document",
+            amount=Decimal("25.00"),
+            proof_type="PDF",
+            validator="SENDER",
+            status=MilestoneStatus.WAITING,
+        )
+        db_session.add(milestone)
+        db_session.commit()
+
+        payload = ProofCreate(
+            escrow_id=escrow.id,
+            milestone_idx=1,
+            type="PDF",
+            storage_url="https://storage.example.com/proofs/doc.pdf",
+            sha256="hash-ai-proof",
+            metadata={"invoice_total_amount": 25},
+        )
+
+        proof = proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+        db_session.refresh(proof)
+
+        assert proof.ai_risk_level == stub_result["risk_level"]
+        assert isinstance(proof.ai_score, Decimal)
+        assert proof.ai_score == Decimal("0.66")
+        assert proof.ai_flags == stub_result["flags"]
+        assert proof.ai_explanation == stub_result["explanation"]
+        assert proof.ai_checked_at is not None
+        assert proof.metadata_["ai_assessment"] == stub_result
+    finally:
+        settings.AI_PROOF_ADVISOR_ENABLED = original_flag
+
+
+def test_submit_proof_uses_ocr_invoice_fields(monkeypatch, db_session):
+    escrow, milestone = _create_pdf_milestone(db_session)
+
+    monkeypatch.setattr(
+        proofs_service,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {
+            "ocr_status": "success",
+            "ocr_provider": "dummy",
+            "total_amount": Decimal("321.00"),
+            "currency": "eur",
+        },
+    )
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://storage.example.com/proofs/doc.pdf",
+        sha256="hash-invoice-proof",
+        metadata={},
+    )
+
+    proof = proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+    db_session.refresh(proof)
+
+    assert proof.invoice_total_amount == Decimal("321.00")
+    assert proof.invoice_currency == "EUR"
+    assert proof.metadata_["invoice_total_amount"] == "321.00"
+    assert proof.metadata_["invoice_currency"] == "eur"
+    assert proof.metadata_["ocr_raw"]["total_amount"] == "321.00"
+    assert proof.metadata_["ocr_raw"]["currency"] == "eur"
+
+
+def test_submit_proof_prefers_user_invoice_fields(monkeypatch, db_session):
+    escrow, milestone = _create_pdf_milestone(db_session)
+
+    monkeypatch.setattr(
+        proofs_service,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {
+            "ocr_status": "success",
+            "ocr_provider": "dummy",
+            "total_amount": Decimal("999.99"),
+            "currency": "eur",
+        },
+    )
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://storage.example.com/proofs/doc.pdf",
+        sha256="hash-invoice-proof-user",
+        metadata={"invoice_total_amount": "150.50", "invoice_currency": "gbp"},
+    )
+
+    proof = proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+    db_session.refresh(proof)
+
+    assert proof.invoice_total_amount == Decimal("150.50")
+    assert proof.invoice_currency == "GBP"
+    assert proof.metadata_["invoice_total_amount"] == "150.50"
+    assert proof.metadata_["invoice_currency"] == "gbp"
+    assert proof.metadata_["ocr_raw"]["total_amount"] == "999.99"
+    assert proof.metadata_["ocr_raw"]["currency"] == "eur"
+
+
+def test_submit_proof_invalid_currency_returns_422(monkeypatch, db_session):
+    escrow, milestone = _create_pdf_milestone(db_session)
+
+    monkeypatch.setattr(
+        proofs_service,
+        "run_invoice_ocr_if_enabled",
+        lambda _bytes: {"ocr_status": "success", "ocr_provider": "dummy", "currency": "usd4"},
+    )
+
+    payload = ProofCreate(
+        escrow_id=escrow.id,
+        milestone_idx=1,
+        type="PDF",
+        storage_url="https://storage.example.com/proofs/doc.pdf",
+        sha256="hash-invoice-proof-invalid-currency",
+        metadata={},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        proofs_service.submit_proof(db_session, payload, actor="apikey:test")
+
+    assert exc.value.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert exc.value.detail["error"]["code"] == "INVOICE_NORMALIZATION_ERROR"

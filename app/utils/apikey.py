@@ -9,14 +9,19 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.config import DEV_API_KEY, DEV_API_KEY_ALLOWED, settings
+from app.config import DEV_API_KEY, DEV_API_KEY_ALLOWED, get_settings
 from app.models.api_key import ApiKey
+
+
+def _secret_key() -> str:
+    return get_settings().SECRET_KEY
 
 
 def hash_key(raw: str) -> str:
     """Return an HMAC-SHA256 hash for the provided API key."""
 
-    return hmac.new(settings.SECRET_KEY.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    secret = _secret_key().encode()
+    return hmac.new(secret, raw.encode(), hashlib.sha256).hexdigest()
 
 
 def gen_key(prefix_len: int = 6) -> tuple[str, str, str]:
