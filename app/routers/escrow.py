@@ -1,13 +1,22 @@
 """Escrow agreement endpoints."""
-from fastapi import APIRouter, Body, Depends, Header, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.api_key import ApiKey, ApiScope
-from app.models.user import User
 from app.models.audit import AuditLog
 from app.models.escrow import EscrowAgreement
-from app.schemas.escrow import EscrowActionPayload, EscrowCreate, EscrowDepositCreate, EscrowRead
+from app.models.milestone import Milestone, MilestoneStatus
+from app.models.user import User
+from app.schemas.escrow import (
+    EscrowActionPayload,
+    EscrowCreate,
+    EscrowDepositCreate,
+    EscrowRead,
+    MilestoneCreate,
+    MilestoneRead,
+)
 from app.schemas.funding import FundingSessionRead
 from app.security import require_scope
 from app.services import escrow as escrow_service
@@ -19,6 +28,13 @@ router = APIRouter(
     prefix="/escrows",
     tags=["escrow"],
 )
+
+
+def _get_escrow_or_404(db: Session, escrow_id: int) -> EscrowAgreement:
+    escrow = db.get(EscrowAgreement, escrow_id)
+    if escrow is None:
+        raise HTTPException(status_code=404, detail="Escrow not found")
+    return escrow
 
 
 @router.post("", response_model=EscrowRead, status_code=status.HTTP_201_CREATED)
@@ -139,3 +155,106 @@ def read_escrow(
     )
     db.commit()
     return escrow
+
+
+@router.post(
+    "/{escrow_id}/milestones",
+    response_model=MilestoneRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_milestone_for_escrow(
+    escrow_id: int,
+    payload: MilestoneCreate,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin})),
+):
+    escrow = _get_escrow_or_404(db, escrow_id)
+
+    if payload.currency.upper() != escrow.currency.upper():
+        raise HTTPException(
+            status_code=400,
+            detail="Milestone currency must match escrow currency",
+        )
+
+    existing_amount = (
+        db.execute(
+            select(func.coalesce(func.sum(Milestone.amount), 0))
+            .where(Milestone.escrow_id == escrow.id)
+        )
+        .scalar_one()
+    )
+
+    if existing_amount + payload.amount > escrow.amount_total:
+        raise HTTPException(
+            status_code=400,
+            detail="Total milestone amounts exceed escrow amount_total",
+        )
+
+    existing = db.execute(
+        select(Milestone.id).where(
+            Milestone.escrow_id == escrow.id,
+            Milestone.idx == payload.sequence_index,
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="A milestone with this sequence_index already exists for this escrow",
+        )
+
+    milestone = Milestone(
+        escrow_id=escrow.id,
+        idx=payload.sequence_index,
+        label=payload.label,
+        amount=payload.amount,
+        currency=payload.currency.upper(),
+        status=MilestoneStatus.WAITING,
+        proof_kind=payload.proof_kind,
+        proof_requirements=payload.proof_requirements,
+    )
+
+    db.add(milestone)
+    db.commit()
+    db.refresh(milestone)
+    return milestone
+
+
+@router.get(
+    "/{escrow_id}/milestones",
+    response_model=list[MilestoneRead],
+    status_code=status.HTTP_200_OK,
+)
+def list_milestones_for_escrow(
+    escrow_id: int,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.sender, ApiScope.admin})),
+):
+    _get_escrow_or_404(db, escrow_id)
+
+    milestones = (
+        db.execute(
+            select(Milestone)
+            .where(Milestone.escrow_id == escrow_id)
+            .order_by(Milestone.idx)
+        )
+        .scalars()
+        .all()
+    )
+    return milestones
+
+
+@router.get(
+    "/milestones/{milestone_id}",
+    response_model=MilestoneRead,
+    status_code=status.HTTP_200_OK,
+)
+def get_milestone(
+    milestone_id: int,
+    db: Session = Depends(get_db),
+    api_key: ApiKey = Depends(require_scope({ApiScope.admin, ApiScope.sender})),
+):
+    milestone = db.get(Milestone, milestone_id)
+    if milestone is None:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    return milestone
