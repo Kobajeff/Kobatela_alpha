@@ -61,4 +61,5 @@ class MilestoneRead(BaseModel):
     proof_kind: str | None = None
     proof_requirements: Dict[str, Any] = Field(default_factory=dict)
 
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+    class Config:
+        from_attributes = True
