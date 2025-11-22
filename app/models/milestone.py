@@ -59,3 +59,18 @@ class Milestone(Base):
     status: Mapped[MilestoneStatus] = mapped_column(SqlEnum(MilestoneStatus), nullable=False, default=MilestoneStatus.WAITING)
 
     proofs = relationship("Proof", back_populates="milestone", cascade="all, delete-orphan")
+
+    @property
+    def proof_type(self) -> str:
+        """Backward-compatible alias for ``proof_kind``.
+
+        Existing services reference ``milestone.proof_type``; keep this alias to
+        avoid breaking those callers while the column is mapped to
+        :pyattr:`proof_kind`.
+        """
+
+        return self.proof_kind
+
+    @proof_type.setter
+    def proof_type(self, value: str) -> None:
+        self.proof_kind = value
