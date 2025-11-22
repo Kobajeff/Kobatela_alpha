@@ -1,4 +1,4 @@
-# Kobatela_alpha — Capability & Stability Audit (2025-05-16)
+# Kobatela_alpha — Capability & Stability Audit (2025-11-22)
 
 ## A. Executive summary
 - FastAPI stack with scoped API-key auth, role checks, and audit logging for key actions across escrows, proofs, and payments.【F:app/security.py†L21-L155】【F:app/routers/escrow.py†L24-L141】
