@@ -13,7 +13,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from .base import Base
 
@@ -47,8 +47,9 @@ class Milestone(Base):
     idx: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str] = mapped_column(String(200), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), nullable=False)
-    proof_kind: Mapped[str] = mapped_column("proof_type", String(50), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    proof_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    proof_kind = synonym("proof_type")
     validator: Mapped[str] = mapped_column(String(50), nullable=False, default="SENDER")
 
     # Detailed configuration of the expected proof for this milestone
