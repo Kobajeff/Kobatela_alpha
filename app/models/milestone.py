@@ -3,8 +3,7 @@ from decimal import Decimal
 from enum import Enum as PyEnum
 
 from sqlalchemy import CheckConstraint, Enum as SqlEnum, Float, ForeignKey, Integer, Numeric, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from .base import Base
 
 
